@@ -405,6 +405,13 @@ class CashflowWindow(QMainWindow):
             self.web_view = QWebEngineView()
             layout.addWidget(self.web_view)
 
+    def _load_plotly_preview(self, view: QWidget, filename: str, fig: go.Figure) -> None:
+        PREVIEW_DIR.mkdir(exist_ok=True)
+        preview_path = PREVIEW_DIR / filename
+        fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
+        if QWebEngineView is None:
+            return
+        view.load(QUrl.fromLocalFile(str(preview_path.resolve())))
     def _build_data_tab(self) -> None:
         layout = QVBoxLayout(self.data_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -584,11 +591,10 @@ class CashflowWindow(QMainWindow):
         self.income_metric.value_label.setText(f"CHF {summary.total_in:,.2f}")  # type: ignore[attr-defined]
         self.expense_metric.value_label.setText(f"CHF {summary.total_out:,.2f}")  # type: ignore[attr-defined]
         self.net_metric.value_label.setText(f"CHF {summary.net:,.2f}")  # type: ignore[attr-defined]
-        html = fig.to_html(include_plotlyjs=True, full_html=True)
         if QWebEngineView is None:
             self.web_view.setText("Plot built. Open the interactive preview or save it to generated Plots.")
         else:
-            self.web_view.setHtml(html)
+            self._load_plotly_preview(self.web_view, "sankey_preview.html", fig)
         self.refresh_uncategorized()
         self.refresh_dashboard(df)
 
@@ -597,7 +603,7 @@ class CashflowWindow(QMainWindow):
             return
         PREVIEW_DIR.mkdir(exist_ok=True)
         preview_path = PREVIEW_DIR / "cashflow_preview.html"
-        self.current_fig.write_html(str(preview_path), include_plotlyjs="cdn", full_html=True)
+        self.current_fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
     def _date_column(self) -> str | None:
@@ -705,7 +711,7 @@ class CashflowWindow(QMainWindow):
         if QWebEngineView is None:
             self.category_view.setText("Category chart requires Qt WebEngine.")
         else:
-            self.category_view.setHtml(fig.to_html(include_plotlyjs=True, full_html=True))
+            self._load_plotly_preview(self.category_view, "category_breakdown.html", fig)
 
     def _refresh_top_merchants(self, dashboard: pd.DataFrame) -> None:
         merchants = (
@@ -781,7 +787,8 @@ class CashflowWindow(QMainWindow):
         if QWebEngineView is None:
             self.timeline_view.setText("Timeline chart requires Qt WebEngine.")
         else:
-            self.timeline_view.setHtml(fig.to_html(include_plotlyjs=True, full_html=True))
+            self._load_plotly_preview(self.timeline_view, "daily_cashflow.html", fig)
+
     def populate_preview(self) -> None:
         if self.df is None:
             return
