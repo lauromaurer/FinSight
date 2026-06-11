@@ -60,7 +60,12 @@ from cashflow_core import (
 
 
 PREVIEW_DIR = Path(".preview")
-LOGO_PATH = Path("assets/logo.svg")
+
+def resource_path(relative_path: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path.cwd()))
+    return base / relative_path
+
+LOGO_PATH = resource_path("assets/logo.svg")
 
 
 def load_logo_pixmap(size: int) -> QPixmap:

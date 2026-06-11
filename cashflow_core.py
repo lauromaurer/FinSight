@@ -5,6 +5,7 @@ from io import BytesIO
 from pathlib import Path
 import json
 import re
+import sys
 from typing import Iterable
 
 import pandas as pd
@@ -12,10 +13,11 @@ import plotly.graph_objects as go
 
 
 APP_NAME = "Cashflow Sankey"
-CONFIG_DIR = Path("config")
+APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
+CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"
-PLOTS_DIR = Path("generated Plots")
-UPLOADS_DIR = Path("uploaded CSV files")
+PLOTS_DIR = APP_DIR / "generated Plots"
+UPLOADS_DIR = APP_DIR / "uploaded CSV files"
 
 DEFAULT_RULES = [
     {"pattern": r"twint", "category": "P2P"},

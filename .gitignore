@@ -18,3 +18,7 @@ config/
 Thumbs.db
 .idea/
 .vscode/
+
+build/
+dist/
+release/

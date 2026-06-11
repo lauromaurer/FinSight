@@ -49,6 +49,29 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 - `generated Plots/` - created automatically for saved plots.
 - `uploaded CSV files/` - created automatically for local copies of loaded CSV files.
 
+
+## Windows App Package
+
+A Windows build can be created with:
+
+```powershell
+.\build_exe.bat
+```
+
+The packaged app is written to:
+
+```text
+dist\Cashflow Sankey\Cashflow Sankey.exe
+```
+
+For sharing with non-technical users, zip and share the whole `dist\Cashflow Sankey\` folder. The current local release zip is created at:
+
+```text
+release\Cashflow Sankey Windows.zip
+```
+
+Users should keep the extracted folder together because the exe depends on the bundled `_internal` files.
+
 ## Suggested Git Usage
 
 Transaction CSVs are personal financial data, so they are ignored by default. Keep anonymized sample files only if you intentionally want them in the repository.
