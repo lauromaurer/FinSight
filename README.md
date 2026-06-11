@@ -66,6 +66,29 @@ release\FinSight Windows.zip
 
 Users should keep the extracted folder together because the exe depends on the bundled `_internal` files.
 
+## macOS App Package
+
+Build this on a macOS device:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+./build_mac.sh
+```
+
+The packaged app is written to:
+
+```text
+dist/FinSight.app
+```
+
+The shareable zip is created at:
+
+```text
+release/FinSight macOS.zip
+```
+
 ## Suggested Git Usage
 
 Transaction CSVs are personal financial data, so they are ignored by default. Keep anonymized sample files only if you intentionally want them in the repository.
