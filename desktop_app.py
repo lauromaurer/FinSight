@@ -309,6 +309,7 @@ class CashflowWindow(QMainWindow):
         layout.addWidget(value_label)
         layout.addWidget(label_label)
         card.value_label = value_label  # type: ignore[attr-defined]
+        card.label_label = label_label  # type: ignore[attr-defined]
         return card
 
     def _build_dashboard_tab(self) -> None:
@@ -320,9 +321,11 @@ class CashflowWindow(QMainWindow):
         self.total_outflow_metric = self._metric_card("Total Outflow", "CHF 0.00")
         self.total_inflow_metric = self._metric_card("Total Inflow", "CHF 0.00")
         self.total_saved_metric = self._metric_card("Total Saved", "CHF 0.00")
+        self.period_metric = self._metric_card("Time Period", "No dates")
         metrics.addWidget(self.total_outflow_metric)
         metrics.addWidget(self.total_inflow_metric)
         metrics.addWidget(self.total_saved_metric)
+        metrics.addWidget(self.period_metric)
         layout.addLayout(metrics)
 
         charts = QHBoxLayout()
@@ -730,6 +733,24 @@ class CashflowWindow(QMainWindow):
                 return str(column)
         return None
 
+    @staticmethod
+    def _parse_date_series(series: pd.Series) -> pd.Series:
+        sample = series.dropna().astype(str).head(20)
+        dayfirst = sample.str.contains(r"\d{1,2}\.\d{1,2}\.\d{2,4}", regex=True).any()
+        return pd.to_datetime(series, errors="coerce", dayfirst=bool(dayfirst))
+
+    @staticmethod
+    def _period_text(dates: pd.Series) -> tuple[str, str]:
+        valid = dates.dropna()
+        if valid.empty:
+            return "No dates", "Date column not detected"
+        start = valid.min()
+        end = valid.max()
+        days = max(1, int((end.normalize() - start.normalize()).days) + 1)
+        value = f"{start:%d.%m.%Y} - {end:%d.%m.%Y}"
+        label = "1 day" if days == 1 else f"{days} days"
+        return value, label
+
     def _match_rule(self, text: str) -> tuple[str, str]:
         text = str(text or "")
         for rule in self.rules:
@@ -804,7 +825,7 @@ class CashflowWindow(QMainWindow):
 
         date_col = self._date_column()
         if date_col and date_col in df.columns:
-            dates = pd.to_datetime(df[date_col], errors="coerce", dayfirst=False)
+            dates = self._parse_date_series(df[date_col])
         else:
             dates = pd.Series(pd.NaT, index=df.index)
 
@@ -837,6 +858,9 @@ class CashflowWindow(QMainWindow):
         self.total_outflow_metric.value_label.setText(f"CHF {expenses:,.2f}")  # type: ignore[attr-defined]
         self.total_inflow_metric.value_label.setText(f"CHF {income:,.2f}")  # type: ignore[attr-defined]
         self.total_saved_metric.value_label.setText(f"CHF {net:,.2f}")  # type: ignore[attr-defined]
+        period_value, period_label = self._period_text(dashboard["Date"])
+        self.period_metric.value_label.setText(period_value)  # type: ignore[attr-defined]
+        self.period_metric.label_label.setText(period_label)  # type: ignore[attr-defined]
 
         self._refresh_category_breakdown(dashboard)
         self._refresh_top_merchants(dashboard)
