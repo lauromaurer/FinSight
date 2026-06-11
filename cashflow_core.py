@@ -12,7 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-APP_NAME = "Cashflow Sankey"
+APP_NAME = "Personal Finance Analyzer"
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
 CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"

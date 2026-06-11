@@ -623,7 +623,7 @@ class CashflowWindow(QMainWindow):
     def _store_uploaded_csv(self, source: Path) -> Path:
         ensure_app_dirs()
         UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        stamp = datetime.now().strftime("%d.%m.%Y_%H-%M-%S")
         destination = UPLOADS_DIR / f"{source.stem}_{stamp}{source.suffix or '.csv'}"
         shutil.copy2(source, destination)
         return destination

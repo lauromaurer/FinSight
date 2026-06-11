@@ -1,6 +1,6 @@
-# Cashflow Sankey
+# Personal Finance Analyzer
 
-A desktop app for turning card transaction CSV exports into an interactive cashflow Sankey plot.
+A desktop app for turning card transaction CSV exports into an interactive personal finance analysis.
 
 The app keeps category rules locally, so you do not need to upload a `rules.json` file every time. It also reads bank CSV exports with descriptive metadata lines before the real header, so the CSV can be loaded without manual cleanup.
 
@@ -61,13 +61,13 @@ A Windows build can be created with:
 The packaged app is written to:
 
 ```text
-dist\Cashflow Sankey\Cashflow Sankey.exe
+dist\Personal Finance Analyzer\Personal Finance Analyzer.exe
 ```
 
-For sharing with non-technical users, zip and share the whole `dist\Cashflow Sankey\` folder. The current local release zip is created at:
+For sharing with non-technical users, zip and share the whole `dist\Personal Finance Analyzer\` folder. The current local release zip is created at:
 
 ```text
-release\Cashflow Sankey Windows.zip
+release\Personal Finance Analyzer Windows.zip
 ```
 
 Users should keep the extracted folder together because the exe depends on the bundled `_internal` files.
