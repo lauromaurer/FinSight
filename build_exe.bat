@@ -6,4 +6,4 @@ if not exist ".venv\Scripts\python.exe" (
     exit /b 1
 )
 
-".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name "Personal Finance Analyzer" --icon "assets\logo.ico" --add-data "assets;assets" desktop_app.py
+".venv\Scripts\python.exe" -m PyInstaller --noconfirm --clean --windowed --name "Personal Finance Analyzer" --icon "assets\logo.ico" --add-data "assets;assets" --add-data "default_categories.json;." desktop_app.py

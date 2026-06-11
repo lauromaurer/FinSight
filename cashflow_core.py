@@ -17,6 +17,8 @@ APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
 CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"
 CATEGORIES_PATH = CONFIG_DIR / "categories.json"
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+DEFAULT_CATEGORIES_PATH = BUNDLE_DIR / "default_categories.json"
 PLOTS_DIR = APP_DIR / "generated Plots"
 UPLOADS_DIR = APP_DIR / "uploaded CSV files"
 
@@ -111,6 +113,19 @@ def load_legacy_rules() -> list[dict[str, str]]:
     return []
 
 
+def load_default_categories(path: Path = DEFAULT_CATEGORIES_PATH) -> list[str]:
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = []
+        if isinstance(data, list):
+            categories = [str(item).strip() for item in data if str(item).strip()]
+            if categories:
+                return categories
+    return DEFAULT_CATEGORIES.copy()
+
+
 def load_categories(path: Path = CATEGORIES_PATH) -> list[str]:
     ensure_app_dirs()
     categories: list[str] = []
@@ -121,14 +136,13 @@ def load_categories(path: Path = CATEGORIES_PATH) -> list[str]:
             data = []
         if isinstance(data, list):
             categories.extend(str(item).strip() for item in data if str(item).strip())
+    else:
+        categories.extend(load_default_categories())
 
     for rule in load_rules():
         category = str(rule.get("category", "")).strip()
         if category:
             categories.append(category)
-
-    if not categories:
-        categories.extend(DEFAULT_CATEGORIES)
     return sorted(dict.fromkeys(category for category in categories if category and category != "Other"))
 
 

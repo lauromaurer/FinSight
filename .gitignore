@@ -12,6 +12,7 @@ uploaded CSV files/
 
 # Local persistent app state
 config/
+!default_categories.json
 
 # OS/editor noise
 .DS_Store

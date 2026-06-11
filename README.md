@@ -45,6 +45,7 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 - `assets/logo.svg` - app logo and window icon.
 - `cashflow_core.py` - CSV parsing, categorization, Sankey generation, rule persistence.
 - `main.py` - original Streamlit app.
+- `default_categories.json` - tracked default category labels bundled into releases.
 - `config/rules.json` - created automatically on first run.
 - `generated Plots/` - created automatically for saved plots.
 - `uploaded CSV files/` - created automatically for local copies of loaded CSV files.
