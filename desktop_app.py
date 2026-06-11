@@ -315,12 +315,12 @@ class CashflowWindow(QMainWindow):
         layout.setSpacing(10)
 
         metrics = QHBoxLayout()
-        self.savings_rate_metric = self._metric_card("Savings Rate", "0.0%")
-        self.transaction_metric = self._metric_card("Transactions", "0")
-        self.uncategorized_metric = self._metric_card("Uncategorized", "0")
-        metrics.addWidget(self.savings_rate_metric)
-        metrics.addWidget(self.transaction_metric)
-        metrics.addWidget(self.uncategorized_metric)
+        self.total_outflow_metric = self._metric_card("Total Outflow", "CHF 0.00")
+        self.total_inflow_metric = self._metric_card("Total Inflow", "CHF 0.00")
+        self.total_saved_metric = self._metric_card("Total Saved", "CHF 0.00")
+        metrics.addWidget(self.total_outflow_metric)
+        metrics.addWidget(self.total_inflow_metric)
+        metrics.addWidget(self.total_saved_metric)
         layout.addLayout(metrics)
 
         charts = QHBoxLayout()
@@ -733,12 +733,9 @@ class CashflowWindow(QMainWindow):
         income = float(dashboard["Income"].sum())
         expenses = float(dashboard["Expenses"].sum())
         net = income - expenses
-        savings_rate = (net / income * 100) if income else 0.0
-        uncategorized = int((dashboard["Category"] == "Other").sum())
-
-        self.savings_rate_metric.value_label.setText(f"{savings_rate:.1f}%")  # type: ignore[attr-defined]
-        self.transaction_metric.value_label.setText(f"{len(dashboard):,}")  # type: ignore[attr-defined]
-        self.uncategorized_metric.value_label.setText(f"{uncategorized:,}")  # type: ignore[attr-defined]
+        self.total_outflow_metric.value_label.setText(f"CHF {expenses:,.2f}")  # type: ignore[attr-defined]
+        self.total_inflow_metric.value_label.setText(f"CHF {income:,.2f}")  # type: ignore[attr-defined]
+        self.total_saved_metric.value_label.setText(f"CHF {net:,.2f}")  # type: ignore[attr-defined]
 
         self._refresh_category_breakdown(dashboard)
         self._refresh_top_merchants(dashboard)
