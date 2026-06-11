@@ -16,12 +16,15 @@ APP_NAME = "Cashflow Sankey"
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
 CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"
+CATEGORIES_PATH = CONFIG_DIR / "categories.json"
 PLOTS_DIR = APP_DIR / "generated Plots"
 UPLOADS_DIR = APP_DIR / "uploaded CSV files"
 
+DEFAULT_CATEGORIES = ["P2P", "Transport", "Groceries", "Food & Drink"]
+
 DEFAULT_RULES = [
-    {"pattern": r"twint", "category": "P2P"},
-    {"pattern": r"sbb|bahn|rail", "category": "Transport"},
+    {"pattern": r"twint", "category": "P2P", "merchant": "TWINT"},
+    {"pattern": r"sbb|bahn|rail", "category": "Transport", "merchant": "SBB"},
     {"pattern": r"coop|migros|aldi|lidl", "category": "Groceries"},
     {"pattern": r"restaurant|cafe|bar|pizza|kebab", "category": "Food & Drink"},
 ]
@@ -72,7 +75,11 @@ def load_rules(path: Path = RULES_PATH) -> list[dict[str, str]]:
         pattern = str(item.get("pattern", "")).strip()
         category = str(item.get("category", "")).strip()
         if pattern and category:
-            rules.append({"pattern": pattern, "category": category})
+            rule = {"pattern": pattern, "category": category}
+            merchant = str(item.get("merchant", "")).strip()
+            if merchant:
+                rule["merchant"] = merchant
+            rules.append(rule)
     return rules or DEFAULT_RULES.copy()
 
 
@@ -94,10 +101,41 @@ def load_legacy_rules() -> list[dict[str, str]]:
             pattern = str(item.get("pattern", "")).strip()
             category = str(item.get("category", "")).strip()
             if pattern and category:
-                rules.append({"pattern": pattern, "category": category})
+                rule = {"pattern": pattern, "category": category}
+                merchant = str(item.get("merchant", "")).strip()
+                if merchant:
+                    rule["merchant"] = merchant
+                rules.append(rule)
         if rules:
             return rules
     return []
+
+
+def load_categories(path: Path = CATEGORIES_PATH) -> list[str]:
+    ensure_app_dirs()
+    categories: list[str] = []
+    if path.exists():
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            data = []
+        if isinstance(data, list):
+            categories.extend(str(item).strip() for item in data if str(item).strip())
+
+    for rule in load_rules():
+        category = str(rule.get("category", "")).strip()
+        if category:
+            categories.append(category)
+
+    if not categories:
+        categories.extend(DEFAULT_CATEGORIES)
+    return sorted(dict.fromkeys(category for category in categories if category and category != "Other"))
+
+
+def save_categories(categories: list[str], path: Path = CATEGORIES_PATH) -> None:
+    ensure_app_dirs()
+    cleaned = sorted(dict.fromkeys(str(category).strip() for category in categories if str(category).strip()))
+    path.write_text(json.dumps(cleaned, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def save_rules(rules: list[dict[str, str]], path: Path = RULES_PATH) -> None:

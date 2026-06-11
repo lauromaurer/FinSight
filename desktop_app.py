@@ -51,9 +51,11 @@ from cashflow_core import (
     guess_inflow_column,
     guess_outflow_column,
     guess_text_columns,
+    load_categories,
     load_rules,
     parse_amount_series,
     read_csv_file,
+    save_categories,
     save_rules,
 )
 
@@ -205,6 +207,7 @@ class CashflowWindow(QMainWindow):
         self.resize(1320, 850)
 
         self.rules = load_rules()
+        self.categories = load_categories()
         self.df: pd.DataFrame | None = None
         self.current_csv: Path | None = None
         self.source_csv: Path | None = None
@@ -418,14 +421,15 @@ class CashflowWindow(QMainWindow):
         add_layout.setContentsMargins(14, 12, 14, 12)
         self.new_pattern = QLineEdit()
         self.new_pattern.setPlaceholderText("Regex or merchant keyword")
-        self.new_category = QLineEdit()
-        self.new_category.setPlaceholderText("Category")
+        self.new_category = QComboBox()
+        self.new_category.setEditable(False)
+        self.populate_category_combo()
         self.new_merchant = QLineEdit()
         self.new_merchant.setPlaceholderText("Merchant alias")
         pick_button = QPushButton("Use selected text")
         pick_button.setObjectName("Secondary")
         pick_button.clicked.connect(self.use_selected_uncategorized)
-        add_button = QPushButton("Add rule")
+        add_button = QPushButton("Save assignment")
         add_button.clicked.connect(self.add_rule_from_fields)
         add_layout.addWidget(QLabel("Pattern"), 0, 0)
         add_layout.addWidget(QLabel("Category"), 0, 1)
@@ -440,10 +444,42 @@ class CashflowWindow(QMainWindow):
     def _build_rules_tab(self) -> None:
         layout = QVBoxLayout(self.rules_tab)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(12)
+
+        labels_panel = QFrame()
+        labels_panel.setObjectName("Panel")
+        labels_layout = QVBoxLayout(labels_panel)
+        labels_layout.setContentsMargins(14, 12, 14, 12)
+        labels_layout.addWidget(QLabel("Category labels"))
+        self.categories_table = QTableWidget(0, 1)
+        self.categories_table.setHorizontalHeaderLabels(["Label"])
+        self.categories_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        labels_layout.addWidget(self.categories_table, stretch=1)
+        label_buttons = QHBoxLayout()
+        add_category = QPushButton("New label")
+        add_category.setObjectName("Secondary")
+        add_category.clicked.connect(lambda: self.categories_table.insertRow(self.categories_table.rowCount()))
+        remove_category = QPushButton("Remove selected")
+        remove_category.setObjectName("Secondary")
+        remove_category.clicked.connect(self.remove_selected_categories)
+        save_categories_button = QPushButton("Save labels")
+        save_categories_button.clicked.connect(self.save_categories_from_table)
+        label_buttons.addStretch(1)
+        label_buttons.addWidget(add_category)
+        label_buttons.addWidget(remove_category)
+        label_buttons.addWidget(save_categories_button)
+        labels_layout.addLayout(label_buttons)
+        layout.addWidget(labels_panel, stretch=1)
+
+        rules_panel = QFrame()
+        rules_panel.setObjectName("Panel")
+        rules_layout = QVBoxLayout(rules_panel)
+        rules_layout.setContentsMargins(14, 12, 14, 12)
+        rules_layout.addWidget(QLabel("Learned regex rules"))
         self.rules_table = QTableWidget(0, 3)
-        self.rules_table.setHorizontalHeaderLabels(["Pattern", "Category", "Merchant"])
+        self.rules_table.setHorizontalHeaderLabels(["Regex", "Label", "Merchant alias"])
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        layout.addWidget(self.rules_table, stretch=1)
+        rules_layout.addWidget(self.rules_table, stretch=1)
 
         buttons = QHBoxLayout()
         add_rule = QPushButton("New row")
@@ -458,7 +494,10 @@ class CashflowWindow(QMainWindow):
         buttons.addWidget(add_rule)
         buttons.addWidget(remove_rule)
         buttons.addWidget(save_rule_button)
-        layout.addLayout(buttons)
+        rules_layout.addLayout(buttons)
+        layout.addWidget(rules_panel, stretch=2)
+
+        self.populate_categories_table()
         self.populate_rules_table()
 
     def _build_settings_tab(self) -> None:
@@ -707,9 +746,7 @@ class CashflowWindow(QMainWindow):
         return "Other", ""
 
     def _category_names(self) -> list[str]:
-        categories = {str(rule.get("category", "")).strip() for rule in self.rules}
-        categories.update({"Groceries", "Food & Drink", "Transport", "Shopping", "Subscriptions", "Telecom", "Health", "P2P"})
-        return sorted(c for c in categories if c and c != "Other")
+        return sorted(c for c in self.categories if c and c != "Other")
 
     def _suggest_category(self, merchant: str, text: str) -> str:
         sample = f"{merchant} {text}".lower()
@@ -740,9 +777,7 @@ class CashflowWindow(QMainWindow):
         if best_category:
             return best_category
 
-        clean = re.sub(r"[^\w\s&+-]", " ", merchant, flags=re.UNICODE).strip()
-        clean = re.sub(r"\s+", " ", clean)
-        return clean[:40].title() if clean else "Other"
+        return ""
 
     def _categorized_text_frame(self, df: pd.DataFrame) -> pd.DataFrame:
         text_cols = self.selected_text_columns()
@@ -1005,11 +1040,11 @@ class CashflowWindow(QMainWindow):
             self.new_pattern.setText(re.escape(words[0]) if words else re.escape(example[:80]))
             self.new_merchant.clear()
         if suggestion and suggestion != "Other":
-            self.new_category.setText(suggestion)
+            self._select_category(suggestion)
 
     def add_rule_from_fields(self) -> None:
         pattern = self.new_pattern.text().strip()
-        category = self.new_category.text().strip()
+        category = self.new_category.currentText().strip()
         merchant = self.new_merchant.text().strip()
         if not pattern or not category:
             QMessageBox.warning(self, "Missing rule", "Enter both a pattern and a category.")
@@ -1026,9 +1061,55 @@ class CashflowWindow(QMainWindow):
         save_rules(self.rules)
         self.populate_rules_table()
         self.new_pattern.clear()
-        self.new_category.clear()
         self.new_merchant.clear()
         self.refresh_plot()
+
+    def populate_category_combo(self) -> None:
+        if not hasattr(self, "new_category"):
+            return
+        current = self.new_category.currentText().strip() if self.new_category.count() else ""
+        self.new_category.blockSignals(True)
+        self.new_category.clear()
+        self.new_category.addItems(self._category_names())
+        self.new_category.blockSignals(False)
+        if current:
+            self._select_category(current)
+
+    def _select_category(self, category: str) -> None:
+        if not category or not hasattr(self, "new_category"):
+            return
+        index = self.new_category.findText(category)
+        if index >= 0:
+            self.new_category.setCurrentIndex(index)
+
+    def populate_categories_table(self) -> None:
+        if not hasattr(self, "categories_table"):
+            return
+        self.categories_table.setRowCount(len(self.categories))
+        for row, category in enumerate(self.categories):
+            self.categories_table.setItem(row, 0, QTableWidgetItem(category))
+
+    def remove_selected_categories(self) -> None:
+        rows = sorted({item.row() for item in self.categories_table.selectedItems()}, reverse=True)
+        for row in rows:
+            self.categories_table.removeRow(row)
+
+    def save_categories_from_table(self) -> None:
+        categories: list[str] = []
+        for row in range(self.categories_table.rowCount()):
+            item = self.categories_table.item(row, 0)
+            label = item.text().strip() if item else ""
+            if label and label != "Other":
+                categories.append(label)
+        if not categories:
+            QMessageBox.warning(self, "Missing labels", "Create at least one category label.")
+            return
+        self.categories = sorted(dict.fromkeys(categories))
+        save_categories(self.categories)
+        self.populate_categories_table()
+        self.populate_category_combo()
+        self.refresh_plot()
+        QMessageBox.information(self, "Labels saved", "Category labels were saved to config/categories.json.")
 
     def populate_rules_table(self) -> None:
         self.rules_table.setRowCount(len(self.rules))
@@ -1052,6 +1133,9 @@ class CashflowWindow(QMainWindow):
             category = category_item.text().strip() if category_item else ""
             merchant = merchant_item.text().strip() if merchant_item else ""
             if pattern and category:
+                if category not in self.categories:
+                    QMessageBox.warning(self, "Unknown label", f"Row {row + 1}: choose one of the saved category labels.")
+                    return
                 try:
                     re.compile(pattern, flags=re.IGNORECASE)
                 except re.error as exc:
