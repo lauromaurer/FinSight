@@ -12,6 +12,7 @@ The app keeps category rules locally, so you do not need to upload a `rules.json
 - Local category rules in `config/rules.json`.
 - Rule editor for uncategorized transactions.
 - Interactive Plotly Sankey preview.
+- Dashboard tab with KPI cards, category spending, daily cashflow, top merchants, and uncategorized count.
 - One-click export to `generated Plots`.
 - HTML export by default, with PNG export when Kaleido is available.
 

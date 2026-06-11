@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 import pandas as pd
+import plotly.graph_objects as go
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -310,16 +311,19 @@ class CashflowWindow(QMainWindow):
         layout.addLayout(metrics)
 
         self.tabs = QTabWidget()
+        self.dashboard_tab = QWidget()
         self.chart_tab = QWidget()
         self.data_tab = QWidget()
         self.categorize_tab = QWidget()
         self.rules_tab = QWidget()
+        self.tabs.addTab(self.dashboard_tab, "Dashboard")
         self.tabs.addTab(self.chart_tab, "Plot")
         self.tabs.addTab(self.categorize_tab, "Categorize")
         self.tabs.addTab(self.rules_tab, "Rules")
         self.tabs.addTab(self.data_tab, "Data")
         layout.addWidget(self.tabs, stretch=1)
 
+        self._build_dashboard_tab()
         self._build_chart_tab()
         self._build_categorize_tab()
         self._build_rules_tab()
@@ -340,6 +344,49 @@ class CashflowWindow(QMainWindow):
         card.value_label = value_label  # type: ignore[attr-defined]
         return card
 
+    def _build_dashboard_tab(self) -> None:
+        layout = QVBoxLayout(self.dashboard_tab)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
+        metrics = QHBoxLayout()
+        self.savings_rate_metric = self._metric_card("Savings Rate", "0.0%")
+        self.transaction_metric = self._metric_card("Transactions", "0")
+        self.uncategorized_metric = self._metric_card("Uncategorized", "0")
+        metrics.addWidget(self.savings_rate_metric)
+        metrics.addWidget(self.transaction_metric)
+        metrics.addWidget(self.uncategorized_metric)
+        layout.addLayout(metrics)
+
+        charts = QHBoxLayout()
+        if QWebEngineView is None:
+            self.category_view = QLabel("Category chart requires Qt WebEngine.")
+            self.timeline_view = QLabel("Timeline chart requires Qt WebEngine.")
+            self.category_view.setAlignment(Qt.AlignCenter)
+            self.timeline_view.setAlignment(Qt.AlignCenter)
+        else:
+            self.category_view = QWebEngineView()
+            self.timeline_view = QWebEngineView()
+        charts.addWidget(self.category_view, stretch=1)
+        charts.addWidget(self.timeline_view, stretch=1)
+        layout.addLayout(charts, stretch=2)
+
+        tables = QHBoxLayout()
+        self.top_merchants_table = QTableWidget(0, 3)
+        self.top_merchants_table.setHorizontalHeaderLabels(["Merchant", "Spent", "Transactions"])
+        self.top_merchants_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.top_merchants_table.setAlternatingRowColors(True)
+        self.top_merchants_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        self.category_table = QTableWidget(0, 4)
+        self.category_table.setHorizontalHeaderLabels(["Category", "Income", "Expenses", "Net"])
+        self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.category_table.setAlternatingRowColors(True)
+        self.category_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+
+        tables.addWidget(self.top_merchants_table, stretch=1)
+        tables.addWidget(self.category_table, stretch=1)
+        layout.addLayout(tables, stretch=1)
     def _build_chart_tab(self) -> None:
         layout = QVBoxLayout(self.chart_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -537,12 +584,13 @@ class CashflowWindow(QMainWindow):
         self.income_metric.value_label.setText(f"CHF {summary.total_in:,.2f}")  # type: ignore[attr-defined]
         self.expense_metric.value_label.setText(f"CHF {summary.total_out:,.2f}")  # type: ignore[attr-defined]
         self.net_metric.value_label.setText(f"CHF {summary.net:,.2f}")  # type: ignore[attr-defined]
-        html = fig.to_html(include_plotlyjs="cdn", full_html=True)
+        html = fig.to_html(include_plotlyjs=True, full_html=True)
         if QWebEngineView is None:
             self.web_view.setText("Plot built. Open the interactive preview or save it to generated Plots.")
         else:
             self.web_view.setHtml(html)
         self.refresh_uncategorized()
+        self.refresh_dashboard(df)
 
     def open_preview_external(self) -> None:
         if self.current_fig is None:
@@ -552,6 +600,188 @@ class CashflowWindow(QMainWindow):
         self.current_fig.write_html(str(preview_path), include_plotlyjs="cdn", full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
+    def _date_column(self) -> str | None:
+        if self.df is None:
+            return None
+        keys = ["buchungsdatum", "abschlussdatum", "valutadatum", "date", "datum"]
+        for column in self.df.columns:
+            lc = str(column).lower()
+            if any(key in lc for key in keys):
+                return str(column)
+        return None
+
+    def dashboard_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        text_cols = self.selected_text_columns()
+        combined = combine_text_columns(df, text_cols)
+        categories = apply_categories(combined, self.rules)
+        inflow = parse_amount_series(df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
+        outflow = parse_amount_series(df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
+        merchant = combined.map(self._merchant_from_text)
+
+        date_col = self._date_column()
+        if date_col and date_col in df.columns:
+            dates = pd.to_datetime(df[date_col], errors="coerce", dayfirst=False)
+        else:
+            dates = pd.Series(pd.NaT, index=df.index)
+
+        return pd.DataFrame(
+            {
+                "Text": combined,
+                "Merchant": merchant,
+                "Category": categories,
+                "Income": inflow,
+                "Expenses": outflow,
+                "Net": inflow - outflow,
+                "Date": dates,
+            },
+            index=df.index,
+        )
+
+    @staticmethod
+    def _merchant_from_text(text: str) -> str:
+        text = str(text or "").strip()
+        if not text:
+            return "Unknown"
+        first = re.split(r"[;|]", text, maxsplit=1)[0].strip()
+        return first[:80] if first else text[:80]
+
+    def refresh_dashboard(self, df: pd.DataFrame | None = None) -> None:
+        if self.df is None:
+            return
+        if df is None:
+            df = self.filtered_df()
+
+        dashboard = self.dashboard_frame(df)
+        income = float(dashboard["Income"].sum())
+        expenses = float(dashboard["Expenses"].sum())
+        net = income - expenses
+        savings_rate = (net / income * 100) if income else 0.0
+        uncategorized = int((dashboard["Category"] == "Other").sum())
+
+        self.savings_rate_metric.value_label.setText(f"{savings_rate:.1f}%")  # type: ignore[attr-defined]
+        self.transaction_metric.value_label.setText(f"{len(dashboard):,}")  # type: ignore[attr-defined]
+        self.uncategorized_metric.value_label.setText(f"{uncategorized:,}")  # type: ignore[attr-defined]
+
+        self._refresh_category_breakdown(dashboard)
+        self._refresh_top_merchants(dashboard)
+        self._refresh_timeline(dashboard)
+
+    def _refresh_category_breakdown(self, dashboard: pd.DataFrame) -> None:
+        category_totals = (
+            dashboard.groupby("Category", dropna=False)[["Income", "Expenses", "Net"]]
+            .sum()
+            .sort_values("Expenses", ascending=False)
+        )
+        display = category_totals.head(12).copy()
+        self.category_table.setRowCount(len(display))
+        for row, (category, values) in enumerate(display.iterrows()):
+            self.category_table.setItem(row, 0, QTableWidgetItem(str(category)))
+            self.category_table.setItem(row, 1, QTableWidgetItem(f"CHF {float(values['Income']):,.2f}"))
+            self.category_table.setItem(row, 2, QTableWidgetItem(f"CHF {float(values['Expenses']):,.2f}"))
+            self.category_table.setItem(row, 3, QTableWidgetItem(f"CHF {float(values['Net']):,.2f}"))
+        self.category_table.resizeColumnsToContents()
+        self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+
+        spend = display[display["Expenses"] > 0].sort_values("Expenses", ascending=True)
+        fig = go.Figure(
+            go.Bar(
+                x=spend["Expenses"],
+                y=spend.index.astype(str),
+                orientation="h",
+                marker_color="#2563eb",
+                hovertemplate="%{y}<br>CHF %{x:,.2f}<extra></extra>",
+            )
+        )
+        fig.update_layout(
+            title="Spending by Category",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            font=dict(family="Inter, Segoe UI, Arial", size=12),
+            margin=dict(l=130, r=20, t=48, b=34),
+            xaxis_title="CHF",
+            yaxis_title="",
+            height=360,
+        )
+        if QWebEngineView is None:
+            self.category_view.setText("Category chart requires Qt WebEngine.")
+        else:
+            self.category_view.setHtml(fig.to_html(include_plotlyjs=True, full_html=True))
+
+    def _refresh_top_merchants(self, dashboard: pd.DataFrame) -> None:
+        merchants = (
+            dashboard[dashboard["Expenses"] > 0]
+            .groupby("Merchant", dropna=False)
+            .agg(Spent=("Expenses", "sum"), Transactions=("Expenses", "count"))
+            .sort_values("Spent", ascending=False)
+            .head(12)
+        )
+        self.top_merchants_table.setRowCount(len(merchants))
+        for row, (merchant, values) in enumerate(merchants.iterrows()):
+            self.top_merchants_table.setItem(row, 0, QTableWidgetItem(str(merchant)))
+            self.top_merchants_table.setItem(row, 1, QTableWidgetItem(f"CHF {float(values['Spent']):,.2f}"))
+            self.top_merchants_table.setItem(row, 2, QTableWidgetItem(str(int(values["Transactions"]))))
+        self.top_merchants_table.resizeColumnsToContents()
+        self.top_merchants_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+
+    def _refresh_timeline(self, dashboard: pd.DataFrame) -> None:
+        dated = dashboard.dropna(subset=["Date"]).copy()
+        if dated.empty:
+            ordered = dashboard.reset_index(drop=True).copy()
+            ordered["Step"] = ordered.index + 1
+            ordered["Cumulative Net"] = ordered["Net"].cumsum()
+            fig = go.Figure(
+                go.Scatter(
+                    x=ordered["Step"],
+                    y=ordered["Cumulative Net"],
+                    mode="lines+markers",
+                    line=dict(color="#0f172a", width=3),
+                    hovertemplate="Transaction %{x}<br>CHF %{y:,.2f}<extra></extra>",
+                )
+            )
+            fig.update_layout(xaxis_title="Transaction", title="Cumulative Net Cashflow")
+        else:
+            daily = dated.groupby(dated["Date"].dt.date)[["Income", "Expenses", "Net"]].sum().sort_index()
+            daily["Cumulative Net"] = daily["Net"].cumsum()
+            fig = go.Figure()
+            fig.add_bar(
+                x=daily.index,
+                y=daily["Income"],
+                name="Income",
+                marker_color="#16a34a",
+                hovertemplate="Income<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
+            )
+            fig.add_bar(
+                x=daily.index,
+                y=-daily["Expenses"],
+                name="Expenses",
+                marker_color="#dc2626",
+                hovertemplate="Expenses<br>%{x}<br>CHF %{customdata:,.2f}<extra></extra>",
+                customdata=daily["Expenses"],
+            )
+            fig.add_scatter(
+                x=daily.index,
+                y=daily["Cumulative Net"],
+                name="Cumulative net",
+                mode="lines+markers",
+                line=dict(color="#0f172a", width=3),
+                hovertemplate="Cumulative net<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
+            )
+            fig.update_layout(xaxis_title="Date", title="Daily Cashflow")
+
+        fig.update_layout(
+            barmode="relative",
+            paper_bgcolor="#ffffff",
+            plot_bgcolor="#ffffff",
+            font=dict(family="Inter, Segoe UI, Arial", size=12),
+            margin=dict(l=54, r=24, t=48, b=42),
+            yaxis_title="CHF",
+            height=360,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        )
+        if QWebEngineView is None:
+            self.timeline_view.setText("Timeline chart requires Qt WebEngine.")
+        else:
+            self.timeline_view.setHtml(fig.to_html(include_plotlyjs=True, full_html=True))
     def populate_preview(self) -> None:
         if self.df is None:
             return
