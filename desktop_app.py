@@ -7,7 +7,8 @@ from pathlib import Path
 
 import pandas as pd
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices
+from PySide6.QtGui import QDesktopServices, QIcon, QPainter, QPixmap
+from PySide6.QtSvg import QSvgRenderer
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
@@ -55,6 +56,23 @@ from cashflow_core import (
 
 
 PREVIEW_DIR = Path(".preview")
+LOGO_PATH = Path("assets/logo.svg")
+
+
+def load_logo_pixmap(size: int) -> QPixmap:
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.transparent)
+    if not LOGO_PATH.exists():
+        return pixmap
+
+    renderer = QSvgRenderer(str(LOGO_PATH))
+    if not renderer.isValid():
+        return pixmap
+
+    painter = QPainter(pixmap)
+    renderer.render(painter)
+    painter.end()
+    return pixmap
 
 
 STYLE = """
@@ -80,6 +98,9 @@ QLabel#Title {
 }
 QLabel#Subtitle {
     color: #94a3b8;
+}
+QLabel#Logo {
+    background: transparent;
 }
 QLabel#MetricValue {
     font-size: 22px;
@@ -155,6 +176,8 @@ class CashflowWindow(QMainWindow):
         super().__init__()
         ensure_app_dirs()
         self.setWindowTitle(APP_NAME)
+        if LOGO_PATH.exists():
+            self.setWindowIcon(QIcon(load_logo_pixmap(256)))
         self.resize(1320, 850)
 
         self.rules = load_rules()
@@ -180,6 +203,14 @@ class CashflowWindow(QMainWindow):
         layout = QVBoxLayout(side)
         layout.setContentsMargins(22, 24, 22, 24)
         layout.setSpacing(14)
+
+        logo = QLabel()
+        logo.setObjectName("Logo")
+        logo.setFixedSize(56, 56)
+        if LOGO_PATH.exists():
+            pixmap = load_logo_pixmap(56)
+            logo.setPixmap(pixmap)
+        layout.addWidget(logo)
 
         title = QLabel("Cashflow Sankey")
         title.setObjectName("Title")
@@ -643,6 +674,8 @@ class CashflowWindow(QMainWindow):
 
 def main() -> int:
     app = QApplication(sys.argv)
+    if LOGO_PATH.exists():
+        app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)
     window = CashflowWindow()
     window.show()

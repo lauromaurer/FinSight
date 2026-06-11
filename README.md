@@ -40,6 +40,7 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 ## Project Files
 
 - `desktop_app.py` - desktop GUI.
+- `assets/logo.svg` - app logo and window icon.
 - `cashflow_core.py` - CSV parsing, categorization, Sankey generation, rule persistence.
 - `main.py` - original Streamlit app.
 - `config/rules.json` - created automatically on first run.
