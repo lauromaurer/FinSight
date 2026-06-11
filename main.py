@@ -8,8 +8,8 @@ import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Cashflow", layout="wide")
-st.title("Cashflow")
+st.set_page_config(page_title="FinSight", layout="wide")
+st.title("FinSight")
 
 # -----------------
 # Navigation
@@ -192,7 +192,7 @@ def apply_categories(text_series: pd.Series, rules: list[dict[str, str]]) -> pd.
     return text_series.astype(str).fillna("").map(_one)
 
 
-def build_cashflow_sankey(
+def build_finsight_flow(
     df_in: pd.DataFrame,
     inflow_col: str,
     outflow_col: str,
@@ -389,7 +389,7 @@ if page == "Dashboard":
     df = _require_data()
 
     st.header("Dashboard")
-    st.subheader("Sankey chart")
+    st.subheader("FinSight chart")
 
     all_cols = df.columns.tolist()
 
@@ -447,7 +447,7 @@ if page == "Dashboard":
     text_series = combine_text_columns(tmp, text_cols) if text_cols else None
 
     try:
-        fig = build_cashflow_sankey(
+        fig = build_finsight_flow(
             tmp,
             inflow_col=inflow_col,
             outflow_col=outflow_col,
@@ -457,7 +457,7 @@ if page == "Dashboard":
         )
         st.plotly_chart(fig, use_container_width=True)
     except Exception as e:
-        st.error("Could not build the Sankey chart with the selected columns.")
+        st.error("Could not build the FinSight chart with the selected columns.")
         st.exception(e)
 
 

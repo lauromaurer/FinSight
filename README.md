@@ -1,6 +1,6 @@
-# Personal Finance Analyzer
+# FinSight
 
-A desktop app for turning card transaction CSV exports into an interactive personal finance analysis.
+A desktop app for turning card transaction CSV exports into an interactive financial insight dashboard.
 
 The app keeps category rules locally, so you do not need to upload a `rules.json` file every time. It also reads bank CSV exports with descriptive metadata lines before the real header, so the CSV can be loaded without manual cleanup.
 
@@ -12,8 +12,8 @@ The app keeps category rules locally, so you do not need to upload a `rules.json
 - Automatic delimiter, encoding, and header-row detection.
 - Local category rules in `config/rules.json`.
 - Rule editor for uncategorized transactions.
-- Interactive Plotly Sankey preview.
-- Dashboard tab with KPI cards, category spending, daily cashflow, top merchants, and uncategorized count.
+- Interactive Plotly flow preview.
+- Dashboard tab with KPI cards, category spending, daily flow, top merchants, and uncategorized count.
 - One-click export to `generated Plots`.
 - HTML export by default, with PNG export when Kaleido is available.
 
@@ -43,7 +43,7 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 
 - `desktop_app.py` - desktop GUI.
 - `assets/logo.svg` - app logo and window icon.
-- `cashflow_core.py` - CSV parsing, categorization, Sankey generation, rule persistence.
+- `finsight_core.py` - CSV parsing, categorization, flow generation, rule persistence.
 - `main.py` - original Streamlit app.
 - `default_categories.json` - tracked default category labels bundled into releases.
 - `config/rules.json` - created automatically on first run.
@@ -62,13 +62,13 @@ A Windows build can be created with:
 The packaged app is written to:
 
 ```text
-dist\Personal Finance Analyzer\Personal Finance Analyzer.exe
+dist\FinSight\FinSight.exe
 ```
 
-For sharing with non-technical users, zip and share the whole `dist\Personal Finance Analyzer\` folder. The current local release zip is created at:
+For sharing with non-technical users, zip and share the whole `dist\FinSight\` folder. The current local release zip is created at:
 
 ```text
-release\Personal Finance Analyzer Windows.zip
+release\FinSight Windows.zip
 ```
 
 Users should keep the extracted folder together because the exe depends on the bundled `_internal` files.

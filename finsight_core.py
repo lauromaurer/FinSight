@@ -12,7 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 
 
-APP_NAME = "Personal Finance Analyzer"
+APP_NAME = "FinSight"
 APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path.cwd()
 CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"
@@ -40,7 +40,7 @@ class CsvReadOptions:
 
 
 @dataclass(frozen=True)
-class CashflowSummary:
+class FinSightSummary:
     total_in: float
     total_out: float
     net: float
@@ -317,14 +317,14 @@ def guess_text_columns(df: pd.DataFrame) -> list[str]:
     return guessed[:3]
 
 
-def summarize_cashflow(
+def summarize_finances(
     df_in: pd.DataFrame,
     inflow_col: str,
     outflow_col: str,
     text_series: pd.Series | None,
     rules: list[dict[str, str]],
     decimal_override: str = "Auto",
-) -> CashflowSummary:
+) -> FinSightSummary:
     inflow = parse_amount_series(df_in[inflow_col], decimal_override).fillna(0.0)
     outflow = parse_amount_series(df_in[outflow_col], decimal_override).fillna(0.0).abs()
 
@@ -361,10 +361,10 @@ def summarize_cashflow(
 
     total_in = float(inc_sum.sum())
     total_out = float(exp_sum.sum())
-    return CashflowSummary(total_in, total_out, total_in - total_out, inc_sum, exp_sum)
+    return FinSightSummary(total_in, total_out, total_in - total_out, inc_sum, exp_sum)
 
 
-def build_cashflow_sankey(
+def build_finsight_flow(
     df_in: pd.DataFrame,
     inflow_col: str,
     outflow_col: str,
@@ -372,8 +372,8 @@ def build_cashflow_sankey(
     rules: list[dict[str, str]],
     title: str = "Cash Flow",
     decimal_override: str = "Auto",
-) -> tuple[go.Figure, CashflowSummary]:
-    summary = summarize_cashflow(df_in, inflow_col, outflow_col, text_series, rules, decimal_override)
+) -> tuple[go.Figure, FinSightSummary]:
+    summary = summarize_finances(df_in, inflow_col, outflow_col, text_series, rules, decimal_override)
     inc_sum = summary.income_by_category
     exp_sum = summary.expense_by_category
 

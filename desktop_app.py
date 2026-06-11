@@ -40,12 +40,12 @@ try:
 except Exception:  # pragma: no cover - import depends on installed Qt modules
     QWebEngineView = None
 
-from cashflow_core import (
+from finsight_core import (
     APP_NAME,
     CsvReadOptions,
     PLOTS_DIR,
     UPLOADS_DIR,
-    build_cashflow_sankey,
+    build_finsight_flow,
     combine_text_columns,
     ensure_app_dirs,
     guess_inflow_column,
@@ -197,7 +197,7 @@ QHeaderView::section {
 """
 
 
-class CashflowWindow(QMainWindow):
+class FinSightWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         ensure_app_dirs()
@@ -693,17 +693,17 @@ class CashflowWindow(QMainWindow):
             df = self.filtered_df()
             text_cols = self.selected_text_columns()
             text_series = combine_text_columns(df, text_cols) if text_cols else None
-            fig, summary = build_cashflow_sankey(
+            fig, summary = build_finsight_flow(
                 df,
                 self.inflow_box.currentText(),
                 self.outflow_box.currentText(),
                 text_series,
                 self.rules,
-                title=(self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "Cash Flow",
+                title=(self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "FinSight",
                 decimal_override=self.decimal_box.currentText(),
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Plot error", f"Could not build the Sankey plot:\n{exc}")
+            QMessageBox.critical(self, "Plot error", f"Could not build the FinSight plot:\n{exc}")
             return
 
         self.current_fig = fig
@@ -711,7 +711,7 @@ class CashflowWindow(QMainWindow):
         if QWebEngineView is None:
             self.web_view.setText("Plot built. Open the interactive preview or save it to generated Plots.")
         else:
-            self._load_plotly_preview(self.web_view, "sankey_preview.html", fig)
+            self._load_plotly_preview(self.web_view, "finsight_flow_preview.html", fig)
         self.refresh_uncategorized()
         self.refresh_dashboard(df)
 
@@ -719,7 +719,7 @@ class CashflowWindow(QMainWindow):
         if self.current_fig is None:
             return
         PREVIEW_DIR.mkdir(exist_ok=True)
-        preview_path = PREVIEW_DIR / "cashflow_preview.html"
+        preview_path = PREVIEW_DIR / "finsight_preview.html"
         self.current_fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
@@ -938,7 +938,7 @@ class CashflowWindow(QMainWindow):
                     hovertemplate="Transaction %{x}<br>CHF %{y:,.2f}<extra></extra>",
                 )
             )
-            fig.update_layout(xaxis_title="Transaction", title="Cumulative Net Cashflow")
+            fig.update_layout(xaxis_title="Transaction", title="Cumulative Net Flow")
         else:
             daily = dated.groupby(dated["Date"].dt.date)[["Income", "Expenses", "Net"]].sum().sort_index()
             daily["Cumulative Net"] = daily["Net"].cumsum()
@@ -966,7 +966,7 @@ class CashflowWindow(QMainWindow):
                 line=dict(color="#0f172a", width=3),
                 hovertemplate="Cumulative net<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
             )
-            fig.update_layout(xaxis_title="Date", title="Daily Cashflow")
+            fig.update_layout(xaxis_title="Date", title="Daily Flow")
 
         fig.update_layout(
             barmode="relative",
@@ -981,7 +981,7 @@ class CashflowWindow(QMainWindow):
         if QWebEngineView is None:
             self.timeline_view.setText("Timeline chart requires Qt WebEngine.")
         else:
-            self._load_plotly_preview(self.timeline_view, "daily_cashflow.html", fig)
+            self._load_plotly_preview(self.timeline_view, "daily_finsight.html", fig)
 
     def populate_preview(self) -> None:
         if self.df is None:
@@ -1178,14 +1178,14 @@ class CashflowWindow(QMainWindow):
         if self.current_fig is None:
             return
         ensure_app_dirs()
-        source = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "cashflow"
+        source = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "finsight"
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        html_path = PLOTS_DIR / f"{source}_sankey_{stamp}.html"
+        html_path = PLOTS_DIR / f"{source}_finsight_{stamp}.html"
         self.current_fig.write_html(str(html_path), include_plotlyjs="cdn", full_html=True)
 
         png_note = ""
         try:
-            png_path = PLOTS_DIR / f"{source}_sankey_{stamp}.png"
+            png_path = PLOTS_DIR / f"{source}_finsight_{stamp}.png"
             self.current_fig.write_image(str(png_path), scale=2)
             png_note = f"\nPNG: {png_path}"
         except Exception:
@@ -1199,7 +1199,7 @@ def main() -> int:
     if LOGO_PATH.exists():
         app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)
-    window = CashflowWindow()
+    window = FinSightWindow()
     window.show()
     return app.exec()
 
