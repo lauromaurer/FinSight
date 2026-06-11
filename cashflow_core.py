@@ -15,6 +15,7 @@ APP_NAME = "Cashflow Sankey"
 CONFIG_DIR = Path("config")
 RULES_PATH = CONFIG_DIR / "rules.json"
 PLOTS_DIR = Path("generated Plots")
+UPLOADS_DIR = Path("uploaded CSV files")
 
 DEFAULT_RULES = [
     {"pattern": r"twint", "category": "P2P"},
@@ -43,6 +44,7 @@ class CashflowSummary:
 def ensure_app_dirs() -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
+    UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def load_rules(path: Path = RULES_PATH) -> list[dict[str, str]]:

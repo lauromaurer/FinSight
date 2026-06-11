@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -42,6 +43,7 @@ from cashflow_core import (
     APP_NAME,
     CsvReadOptions,
     PLOTS_DIR,
+    UPLOADS_DIR,
     apply_categories,
     build_cashflow_sankey,
     combine_text_columns,
@@ -184,6 +186,7 @@ class CashflowWindow(QMainWindow):
         self.rules = load_rules()
         self.df: pd.DataFrame | None = None
         self.current_csv: Path | None = None
+        self.source_csv: Path | None = None
         self.current_fig = None
         self.current_summary = None
 
@@ -200,127 +203,44 @@ class CashflowWindow(QMainWindow):
     def _build_sidebar(self) -> QWidget:
         side = QFrame()
         side.setObjectName("Sidebar")
-        side.setFixedWidth(280)
+        side.setFixedWidth(180)
         layout = QVBoxLayout(side)
-        layout.setContentsMargins(22, 24, 22, 24)
-        layout.setSpacing(14)
+        layout.setContentsMargins(18, 24, 18, 24)
+        layout.setSpacing(16)
 
         logo = QLabel()
         logo.setObjectName("Logo")
         logo.setFixedSize(56, 56)
         if LOGO_PATH.exists():
-            pixmap = load_logo_pixmap(56)
-            logo.setPixmap(pixmap)
-        layout.addWidget(logo)
+            logo.setPixmap(load_logo_pixmap(56))
+        layout.addWidget(logo, alignment=Qt.AlignHCenter)
 
-        title = QLabel("Cashflow Sankey")
-        title.setObjectName("Title")
-        subtitle = QLabel("Desktop transaction explorer")
-        subtitle.setObjectName("Subtitle")
-        subtitle.setWordWrap(True)
-        layout.addWidget(title)
-        layout.addWidget(subtitle)
-        layout.addSpacing(10)
-
-        self.open_button = QPushButton("Open CSV")
+        self.open_button = QPushButton("Load CSV")
         self.open_button.clicked.connect(self.open_csv)
         layout.addWidget(self.open_button)
-
-        self.file_label = QLabel("No CSV loaded")
-        self.file_label.setObjectName("Subtitle")
-        self.file_label.setWordWrap(True)
-        layout.addWidget(self.file_label)
-
-        layout.addSpacing(10)
-        layout.addWidget(QLabel("CSV parsing"))
-        self.sep_box = QComboBox()
-        self.sep_box.addItems(["Auto", ";", ",", "\\t", "|"])
-        self.decimal_box = QComboBox()
-        self.decimal_box.addItems(["Auto", ".", ","])
-        self.skip_auto = QCheckBox("Auto-detect header row")
-        self.skip_auto.setChecked(True)
-        self.skip_rows = QSpinBox()
-        self.skip_rows.setRange(0, 80)
-        self.skip_rows.setValue(0)
-        self.skip_rows.setEnabled(False)
-        self.skip_auto.toggled.connect(self.skip_rows.setDisabled)
-        for widget in (self.sep_box, self.decimal_box, self.skip_auto, self.skip_rows):
-            layout.addWidget(widget)
-
-        reload_button = QPushButton("Reload CSV")
-        reload_button.setObjectName("Secondary")
-        reload_button.clicked.connect(self.reload_csv)
-        layout.addWidget(reload_button)
-
         layout.addStretch(1)
-        self.status_label = QLabel("Rules are saved locally in config/rules.json.")
-        self.status_label.setObjectName("Subtitle")
-        self.status_label.setWordWrap(True)
-        layout.addWidget(self.status_label)
         return side
 
     def _build_main(self) -> QWidget:
         main = QWidget()
         layout = QVBoxLayout(main)
-        layout.setContentsMargins(22, 22, 22, 22)
-        layout.setSpacing(14)
-
-        controls = QFrame()
-        controls.setObjectName("Panel")
-        controls_layout = QGridLayout(controls)
-        controls_layout.setContentsMargins(16, 14, 16, 14)
-        controls_layout.setHorizontalSpacing(12)
-        controls_layout.setVerticalSpacing(8)
-
-        self.inflow_box = QComboBox()
-        self.outflow_box = QComboBox()
-        self.text_table = QTableWidget(0, 2)
-        self.text_table.setHorizontalHeaderLabels(["Use", "Text column"])
-        self.text_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.text_table.verticalHeader().setVisible(False)
-        self.text_table.setFixedHeight(118)
-
-        self.min_amount = QSpinBox()
-        self.min_amount.setRange(0, 100_000)
-        self.min_amount.setSingleStep(10)
-
-        self.refresh_button = QPushButton("Build plot")
-        self.refresh_button.clicked.connect(self.refresh_plot)
-        self.save_plot_button = QPushButton("Save plot")
-        self.save_plot_button.clicked.connect(self.save_plot)
-
-        controls_layout.addWidget(QLabel("Inflow column"), 0, 0)
-        controls_layout.addWidget(QLabel("Outflow column"), 0, 1)
-        controls_layout.addWidget(QLabel("Minimum amount"), 0, 2)
-        controls_layout.addWidget(self.inflow_box, 1, 0)
-        controls_layout.addWidget(self.outflow_box, 1, 1)
-        controls_layout.addWidget(self.min_amount, 1, 2)
-        controls_layout.addWidget(QLabel("Category text columns"), 2, 0, 1, 3)
-        controls_layout.addWidget(self.text_table, 3, 0, 1, 3)
-        controls_layout.addWidget(self.refresh_button, 4, 1)
-        controls_layout.addWidget(self.save_plot_button, 4, 2)
-        layout.addWidget(controls)
-
-        metrics = QHBoxLayout()
-        self.income_metric = self._metric_card("Income", "CHF 0.00")
-        self.expense_metric = self._metric_card("Expenses", "CHF 0.00")
-        self.net_metric = self._metric_card("Net", "CHF 0.00")
-        metrics.addWidget(self.income_metric)
-        metrics.addWidget(self.expense_metric)
-        metrics.addWidget(self.net_metric)
-        layout.addLayout(metrics)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(0)
 
         self.tabs = QTabWidget()
+        self.tabs.setTabPosition(QTabWidget.West)
         self.dashboard_tab = QWidget()
         self.chart_tab = QWidget()
-        self.data_tab = QWidget()
         self.categorize_tab = QWidget()
         self.rules_tab = QWidget()
+        self.data_tab = QWidget()
+        self.settings_tab = QWidget()
         self.tabs.addTab(self.dashboard_tab, "Dashboard")
         self.tabs.addTab(self.chart_tab, "Plot")
         self.tabs.addTab(self.categorize_tab, "Categorize")
         self.tabs.addTab(self.rules_tab, "Rules")
         self.tabs.addTab(self.data_tab, "Data")
+        self.tabs.addTab(self.settings_tab, "Settings")
         layout.addWidget(self.tabs, stretch=1)
 
         self._build_dashboard_tab()
@@ -328,6 +248,7 @@ class CashflowWindow(QMainWindow):
         self._build_categorize_tab()
         self._build_rules_tab()
         self._build_data_tab()
+        self._build_settings_tab()
         return main
 
     def _metric_card(self, label: str, value: str) -> QFrame:
@@ -387,9 +308,19 @@ class CashflowWindow(QMainWindow):
         tables.addWidget(self.top_merchants_table, stretch=1)
         tables.addWidget(self.category_table, stretch=1)
         layout.addLayout(tables, stretch=1)
+
     def _build_chart_tab(self) -> None:
         layout = QVBoxLayout(self.chart_tab)
         layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(10)
+
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        self.save_plot_button = QPushButton("Save plot")
+        self.save_plot_button.clicked.connect(self.save_plot)
+        actions.addWidget(self.save_plot_button)
+        layout.addLayout(actions)
+
         if QWebEngineView is None:
             fallback = QWidget()
             fallback_layout = QVBoxLayout(fallback)
@@ -400,10 +331,10 @@ class CashflowWindow(QMainWindow):
             self.external_preview_button.clicked.connect(self.open_preview_external)
             fallback_layout.addWidget(self.web_view)
             fallback_layout.addWidget(self.external_preview_button, alignment=Qt.AlignCenter)
-            layout.addWidget(fallback)
+            layout.addWidget(fallback, stretch=1)
         else:
             self.web_view = QWebEngineView()
-            layout.addWidget(self.web_view)
+            layout.addWidget(self.web_view, stretch=1)
 
     def _load_plotly_preview(self, view: QWidget, filename: str, fig: go.Figure) -> None:
         PREVIEW_DIR.mkdir(exist_ok=True)
@@ -412,6 +343,7 @@ class CashflowWindow(QMainWindow):
         if QWebEngineView is None:
             return
         view.load(QUrl.fromLocalFile(str(preview_path.resolve())))
+
     def _build_data_tab(self) -> None:
         layout = QVBoxLayout(self.data_tab)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -482,6 +414,91 @@ class CashflowWindow(QMainWindow):
         layout.addLayout(buttons)
         self.populate_rules_table()
 
+    def _build_settings_tab(self) -> None:
+        layout = QVBoxLayout(self.settings_tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
+
+        info = QFrame()
+        info.setObjectName("Panel")
+        info_layout = QGridLayout(info)
+        info_layout.setContentsMargins(16, 14, 16, 14)
+        info_layout.setHorizontalSpacing(12)
+        info_layout.setVerticalSpacing(10)
+
+        self.file_label = QLabel("No CSV loaded")
+        self.file_label.setWordWrap(True)
+        self.uploaded_file_label = QLabel(f"Uploaded CSVs are saved in: {UPLOADS_DIR}")
+        self.uploaded_file_label.setWordWrap(True)
+        self.status_label = QLabel("Rules are saved locally in config/rules.json.")
+        self.status_label.setWordWrap(True)
+        info_layout.addWidget(QLabel("Current CSV"), 0, 0)
+        info_layout.addWidget(self.file_label, 0, 1)
+        info_layout.addWidget(QLabel("Saved copy"), 1, 0)
+        info_layout.addWidget(self.uploaded_file_label, 1, 1)
+        info_layout.addWidget(QLabel("Rules"), 2, 0)
+        info_layout.addWidget(self.status_label, 2, 1)
+        layout.addWidget(info)
+
+        settings = QFrame()
+        settings.setObjectName("Panel")
+        settings_layout = QGridLayout(settings)
+        settings_layout.setContentsMargins(16, 14, 16, 14)
+        settings_layout.setHorizontalSpacing(12)
+        settings_layout.setVerticalSpacing(10)
+
+        self.sep_box = QComboBox()
+        self.sep_box.addItems(["Auto", ";", ",", "\\t", "|"])
+        self.decimal_box = QComboBox()
+        self.decimal_box.addItems(["Auto", ".", ","])
+        self.skip_auto = QCheckBox("Auto-detect header row")
+        self.skip_auto.setChecked(True)
+        self.skip_rows = QSpinBox()
+        self.skip_rows.setRange(0, 80)
+        self.skip_rows.setValue(0)
+        self.skip_rows.setEnabled(False)
+        self.skip_auto.toggled.connect(self.skip_rows.setDisabled)
+
+        self.inflow_box = QComboBox()
+        self.outflow_box = QComboBox()
+        self.min_amount = QSpinBox()
+        self.min_amount.setRange(0, 100_000)
+        self.min_amount.setSingleStep(10)
+
+        self.text_table = QTableWidget(0, 2)
+        self.text_table.setHorizontalHeaderLabels(["Use", "Text column"])
+        self.text_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.text_table.verticalHeader().setVisible(False)
+        self.text_table.setFixedHeight(260)
+
+        self.refresh_button = QPushButton("Apply settings")
+        self.refresh_button.clicked.connect(self.refresh_plot)
+        self.reload_button = QPushButton("Reload CSV")
+        self.reload_button.setObjectName("Secondary")
+        self.reload_button.clicked.connect(self.reload_csv)
+
+        settings_layout.addWidget(QLabel("Delimiter"), 0, 0)
+        settings_layout.addWidget(QLabel("Decimal"), 0, 1)
+        settings_layout.addWidget(QLabel("Header row"), 0, 2)
+        settings_layout.addWidget(self.sep_box, 1, 0)
+        settings_layout.addWidget(self.decimal_box, 1, 1)
+        settings_layout.addWidget(self.skip_auto, 1, 2)
+        settings_layout.addWidget(QLabel("Manual rows to skip"), 2, 2)
+        settings_layout.addWidget(self.skip_rows, 3, 2)
+
+        settings_layout.addWidget(QLabel("Inflow column"), 4, 0)
+        settings_layout.addWidget(QLabel("Outflow column"), 4, 1)
+        settings_layout.addWidget(QLabel("Minimum amount"), 4, 2)
+        settings_layout.addWidget(self.inflow_box, 5, 0)
+        settings_layout.addWidget(self.outflow_box, 5, 1)
+        settings_layout.addWidget(self.min_amount, 5, 2)
+        settings_layout.addWidget(QLabel("Category text columns"), 6, 0, 1, 3)
+        settings_layout.addWidget(self.text_table, 7, 0, 1, 3)
+        settings_layout.addWidget(self.reload_button, 8, 1)
+        settings_layout.addWidget(self.refresh_button, 8, 2)
+        layout.addWidget(settings)
+        layout.addStretch(1)
+
     def _set_ready_state(self, ready: bool) -> None:
         for widget in (
             self.inflow_box,
@@ -505,9 +522,22 @@ class CashflowWindow(QMainWindow):
         file_name, _ = QFileDialog.getOpenFileName(self, "Open transactions CSV", "", "CSV Files (*.csv);;All Files (*)")
         if not file_name:
             return
-        self.current_csv = Path(file_name)
+        source = Path(file_name)
+        try:
+            self.source_csv = source
+            self.current_csv = self._store_uploaded_csv(source)
+        except Exception as exc:
+            QMessageBox.critical(self, "CSV storage error", f"Could not save a local copy of the CSV:\n{exc}")
+            return
         self.reload_csv()
 
+    def _store_uploaded_csv(self, source: Path) -> Path:
+        ensure_app_dirs()
+        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        destination = UPLOADS_DIR / f"{source.stem}_{stamp}{source.suffix or '.csv'}"
+        shutil.copy2(source, destination)
+        return destination
     def reload_csv(self) -> None:
         if self.current_csv is None:
             return
@@ -516,7 +546,8 @@ class CashflowWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "CSV error", f"Could not read the CSV:\n{exc}")
             return
-        self.file_label.setText(str(self.current_csv))
+        self.file_label.setText(str(self.source_csv or self.current_csv))
+        self.uploaded_file_label.setText(str(self.current_csv))
         self.populate_columns()
         self.populate_preview()
         self._set_ready_state(True)
@@ -579,7 +610,7 @@ class CashflowWindow(QMainWindow):
                 self.outflow_box.currentText(),
                 text_series,
                 self.rules,
-                title=self.current_csv.stem if self.current_csv else "Cash Flow",
+                title=(self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "Cash Flow",
                 decimal_override=self.decimal_box.currentText(),
             )
         except Exception as exc:
@@ -588,9 +619,6 @@ class CashflowWindow(QMainWindow):
 
         self.current_fig = fig
         self.current_summary = summary
-        self.income_metric.value_label.setText(f"CHF {summary.total_in:,.2f}")  # type: ignore[attr-defined]
-        self.expense_metric.value_label.setText(f"CHF {summary.total_out:,.2f}")  # type: ignore[attr-defined]
-        self.net_metric.value_label.setText(f"CHF {summary.net:,.2f}")  # type: ignore[attr-defined]
         if QWebEngineView is None:
             self.web_view.setText("Plot built. Open the interactive preview or save it to generated Plots.")
         else:
@@ -893,7 +921,7 @@ class CashflowWindow(QMainWindow):
         if self.current_fig is None:
             return
         ensure_app_dirs()
-        source = self.current_csv.stem if self.current_csv else "cashflow"
+        source = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "cashflow"
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         html_path = PLOTS_DIR / f"{source}_sankey_{stamp}.html"
         self.current_fig.write_html(str(html_path), include_plotlyjs="cdn", full_html=True)

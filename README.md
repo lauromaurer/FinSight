@@ -8,6 +8,7 @@ The app keeps category rules locally, so you do not need to upload a `rules.json
 
 - Desktop GUI built with PySide6.
 - CSV import through a file picker.
+- Loaded CSV files are copied into `uploaded CSV files/` for local reuse.
 - Automatic delimiter, encoding, and header-row detection.
 - Local category rules in `config/rules.json`.
 - Rule editor for uncategorized transactions.
@@ -46,6 +47,7 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 - `main.py` - original Streamlit app.
 - `config/rules.json` - created automatically on first run.
 - `generated Plots/` - created automatically for saved plots.
+- `uploaded CSV files/` - created automatically for local copies of loaded CSV files.
 
 ## Suggested Git Usage
 
