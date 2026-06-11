@@ -31,12 +31,6 @@ pip install -r requirements.txt
 python desktop_app.py
 ```
 
-The older Streamlit prototype is still available:
-
-```powershell
-streamlit run main.py
-```
-
 If your Python installation has Qt WebEngine available, the Plotly chart appears inside the app. Otherwise, use the **Open interactive preview** button; it opens a local HTML preview in your browser while keeping the CSV/rules workflow in the desktop app.
 
 ## Project Files
@@ -44,7 +38,6 @@ If your Python installation has Qt WebEngine available, the Plotly chart appears
 - `desktop_app.py` - desktop GUI.
 - `assets/logo.svg` - app logo and window icon.
 - `finsight_core.py` - CSV parsing, categorization, flow generation, rule persistence.
-- `main.py` - original Streamlit app.
 - `default_categories.json` - tracked default category labels bundled into releases.
 - `config/rules.json` - created automatically on first run.
 - `generated Plots/` - created automatically for saved plots.

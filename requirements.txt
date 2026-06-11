@@ -3,5 +3,4 @@ plotly
 PySide6
 PySide6_Addons
 kaleido
-streamlit
 pyinstaller
