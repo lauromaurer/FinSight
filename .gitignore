@@ -1,0 +1,19 @@
+﻿.venv/
+.tmp/
+.preview/
+__pycache__/
+*.py[cod]
+
+# Personal financial data and generated output
+*.csv
+rules-*.json
+generated Plots/
+
+# Local persistent app state
+config/
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
