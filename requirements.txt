@@ -1,5 +1,6 @@
 pandas
 plotly
-PySide6_Essentials
+PySide6
+PySide6_Addons
 kaleido
 streamlit
