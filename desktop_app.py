@@ -45,7 +45,6 @@ from cashflow_core import (
     CsvReadOptions,
     PLOTS_DIR,
     UPLOADS_DIR,
-    apply_categories,
     build_cashflow_sankey,
     combine_text_columns,
     ensure_app_dirs,
@@ -406,9 +405,9 @@ class CashflowWindow(QMainWindow):
         top.addWidget(self.search_box, stretch=1)
         layout.addLayout(top)
 
-        self.uncat_table = QTableWidget(0, 3)
-        self.uncat_table.setHorizontalHeaderLabels(["Index", "Text", "Amount"])
-        self.uncat_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.uncat_table = QTableWidget(0, 5)
+        self.uncat_table.setHorizontalHeaderLabels(["Rows", "Merchant", "Suggested Category", "Example Text", "Total Amount"])
+        self.uncat_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
         self.uncat_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.uncat_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         layout.addWidget(self.uncat_table, stretch=1)
@@ -421,6 +420,8 @@ class CashflowWindow(QMainWindow):
         self.new_pattern.setPlaceholderText("Regex or merchant keyword")
         self.new_category = QLineEdit()
         self.new_category.setPlaceholderText("Category")
+        self.new_merchant = QLineEdit()
+        self.new_merchant.setPlaceholderText("Merchant alias")
         pick_button = QPushButton("Use selected text")
         pick_button.setObjectName("Secondary")
         pick_button.clicked.connect(self.use_selected_uncategorized)
@@ -428,17 +429,19 @@ class CashflowWindow(QMainWindow):
         add_button.clicked.connect(self.add_rule_from_fields)
         add_layout.addWidget(QLabel("Pattern"), 0, 0)
         add_layout.addWidget(QLabel("Category"), 0, 1)
+        add_layout.addWidget(QLabel("Merchant"), 0, 2)
         add_layout.addWidget(self.new_pattern, 1, 0)
         add_layout.addWidget(self.new_category, 1, 1)
-        add_layout.addWidget(pick_button, 1, 2)
-        add_layout.addWidget(add_button, 1, 3)
+        add_layout.addWidget(self.new_merchant, 1, 2)
+        add_layout.addWidget(pick_button, 1, 3)
+        add_layout.addWidget(add_button, 1, 4)
         layout.addWidget(add)
 
     def _build_rules_tab(self) -> None:
         layout = QVBoxLayout(self.rules_tab)
         layout.setContentsMargins(8, 8, 8, 8)
-        self.rules_table = QTableWidget(0, 2)
-        self.rules_table.setHorizontalHeaderLabels(["Pattern", "Category"])
+        self.rules_table = QTableWidget(0, 3)
+        self.rules_table.setHorizontalHeaderLabels(["Pattern", "Category", "Merchant"])
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(self.rules_table, stretch=1)
 
@@ -688,13 +691,81 @@ class CashflowWindow(QMainWindow):
                 return str(column)
         return None
 
-    def dashboard_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+    def _match_rule(self, text: str) -> tuple[str, str]:
+        text = str(text or "")
+        for rule in self.rules:
+            pattern = (rule.get("pattern") or "").strip()
+            if not pattern:
+                continue
+            try:
+                if re.search(pattern, text, flags=re.IGNORECASE):
+                    category = (rule.get("category") or "").strip() or "Other"
+                    merchant = (rule.get("merchant") or "").strip()
+                    return category, merchant
+            except re.error:
+                continue
+        return "Other", ""
+
+    def _category_names(self) -> list[str]:
+        categories = {str(rule.get("category", "")).strip() for rule in self.rules}
+        categories.update({"Groceries", "Food & Drink", "Transport", "Shopping", "Subscriptions", "Telecom", "Health", "P2P"})
+        return sorted(c for c in categories if c and c != "Other")
+
+    def _suggest_category(self, merchant: str, text: str) -> str:
+        sample = f"{merchant} {text}".lower()
+        hints = [
+            ("Groceries", ["migros", "coop", "aldi", "lidl", "denner", "supermarkt", "market"]),
+            ("Food & Drink", ["restaurant", "cafe", "bar", "pizza", "kebab", "mcdonald", "burger", "bakery", "baeckerei"]),
+            ("Transport", ["sbb", "cff", "ffs", "bahn", "rail", "bus", "train", "ticket", "uber", "taxi"]),
+            ("Shopping", ["shop", "store", "amazon", "aliexpress", "zalando", "ikea", "galaxus"]),
+            ("Subscriptions", ["apple.com/bill", "spotify", "netflix", "subscription", "abo"]),
+            ("Telecom", ["yallo", "sunrise", "salt", "swisscom", "telecom"]),
+            ("Health", ["apotheke", "pharmacy", "arzt", "doctor", "hirslanden"]),
+            ("P2P", ["twint", "paypal"]),
+        ]
+        existing = set(self._category_names())
+        for category, keywords in hints:
+            if category in existing and any(keyword in sample for keyword in keywords):
+                return category
+
+        merchant_tokens = set(re.findall(r"[a-z0-9]{4,}", merchant.lower()))
+        best_category = ""
+        best_score = 0
+        for category in existing:
+            category_tokens = set(re.findall(r"[a-z0-9]{4,}", category.lower()))
+            score = len(merchant_tokens & category_tokens)
+            if score > best_score:
+                best_category = category
+                best_score = score
+        if best_category:
+            return best_category
+
+        clean = re.sub(r"[^\w\s&+-]", " ", merchant, flags=re.UNICODE).strip()
+        clean = re.sub(r"\s+", " ", clean)
+        return clean[:40].title() if clean else "Other"
+
+    def _categorized_text_frame(self, df: pd.DataFrame) -> pd.DataFrame:
         text_cols = self.selected_text_columns()
         combined = combine_text_columns(df, text_cols)
-        categories = apply_categories(combined, self.rules)
+        categories: list[str] = []
+        merchants: list[str] = []
+        suggestions: list[str] = []
+        for text in combined.astype(str):
+            category, merchant_alias = self._match_rule(text)
+            merchant = merchant_alias or self._merchant_from_text(text)
+            suggestion = category if category != "Other" else self._suggest_category(merchant, text)
+            categories.append(category)
+            merchants.append(merchant)
+            suggestions.append(suggestion)
+        return pd.DataFrame(
+            {"Text": combined, "Category": categories, "Merchant": merchants, "Suggested Category": suggestions},
+            index=df.index,
+        )
+
+    def dashboard_frame(self, df: pd.DataFrame) -> pd.DataFrame:
+        matched = self._categorized_text_frame(df)
         inflow = parse_amount_series(df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
         outflow = parse_amount_series(df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
-        merchant = combined.map(self._merchant_from_text)
 
         date_col = self._date_column()
         if date_col and date_col in df.columns:
@@ -702,18 +773,12 @@ class CashflowWindow(QMainWindow):
         else:
             dates = pd.Series(pd.NaT, index=df.index)
 
-        return pd.DataFrame(
-            {
-                "Text": combined,
-                "Merchant": merchant,
-                "Category": categories,
-                "Income": inflow,
-                "Expenses": outflow,
-                "Net": inflow - outflow,
-                "Date": dates,
-            },
-            index=df.index,
-        )
+        matched = matched.copy()
+        matched["Income"] = inflow
+        matched["Expenses"] = outflow
+        matched["Net"] = inflow - outflow
+        matched["Date"] = dates
+        return matched
 
     @staticmethod
     def _merchant_from_text(text: str) -> str:
@@ -721,6 +786,7 @@ class CashflowWindow(QMainWindow):
         if not text:
             return "Unknown"
         first = re.split(r"[;|]", text, maxsplit=1)[0].strip()
+        first = re.sub(r"\s+", " ", first)
         return first[:80] if first else text[:80]
 
     def refresh_dashboard(self, df: pd.DataFrame | None = None) -> None:
@@ -872,15 +938,15 @@ class CashflowWindow(QMainWindow):
 
     def categorized_frame(self) -> pd.DataFrame:
         assert self.df is not None
-        text_cols = self.selected_text_columns()
-        combined = combine_text_columns(self.df, text_cols)
-        cats = apply_categories(combined, self.rules)
+        categorized = self._categorized_text_frame(self.df)
         amount = pd.Series(0.0, index=self.df.index)
         if self.inflow_box.currentText() and self.outflow_box.currentText():
             inc = parse_amount_series(self.df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
-            out = parse_amount_series(self.df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
-            amount = inc + out
-        return pd.DataFrame({"Text": combined, "Category": cats, "Amount": amount}, index=self.df.index)
+            out = parse_amount_series(self.df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
+            amount = out.where(out > 0, inc)
+        categorized = categorized.copy()
+        categorized["Amount"] = amount
+        return categorized
 
     def refresh_uncategorized(self) -> None:
         if self.df is None:
@@ -889,30 +955,62 @@ class CashflowWindow(QMainWindow):
         other = categorized[categorized["Category"] == "Other"].copy()
         search = self.search_box.text().strip()
         if search:
-            other = other[other["Text"].str.contains(search, case=False, na=False)]
+            haystack = (
+                other["Text"].astype(str) + " " +
+                other["Merchant"].astype(str) + " " +
+                other["Suggested Category"].astype(str)
+            )
+            other = other[haystack.str.contains(search, case=False, na=False, regex=False)]
 
-        self.uncat_table.setRowCount(len(other))
-        for row, (idx, data) in enumerate(other.iterrows()):
-            self.uncat_table.setItem(row, 0, QTableWidgetItem(str(idx)))
-            self.uncat_table.setItem(row, 1, QTableWidgetItem(str(data["Text"])))
-            self.uncat_table.setItem(row, 2, QTableWidgetItem(f"{float(data['Amount']):,.2f}"))
+        grouped = (
+            other.groupby(["Merchant", "Suggested Category"], dropna=False)
+            .agg(Rows=("Text", "count"), Example=("Text", "first"), Total=("Amount", "sum"))
+            .sort_values(["Total", "Rows"], ascending=[False, False])
+        )
+
+        self.uncat_table.setRowCount(len(grouped))
+        for row, ((merchant, suggestion), values) in enumerate(grouped.iterrows()):
+            payload = {
+                "merchant": str(merchant),
+                "suggestion": str(suggestion),
+                "example": str(values["Example"]),
+            }
+            rows_item = QTableWidgetItem(str(int(values["Rows"])))
+            rows_item.setData(Qt.UserRole, payload)
+            self.uncat_table.setItem(row, 0, rows_item)
+            self.uncat_table.setItem(row, 1, QTableWidgetItem(str(merchant)))
+            self.uncat_table.setItem(row, 2, QTableWidgetItem(str(suggestion)))
+            self.uncat_table.setItem(row, 3, QTableWidgetItem(str(values["Example"])))
+            self.uncat_table.setItem(row, 4, QTableWidgetItem(f"{float(values['Total']):,.2f}"))
         self.uncat_table.resizeColumnsToContents()
-        self.uncat_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.uncat_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
 
     def use_selected_uncategorized(self) -> None:
         selected = self.uncat_table.selectedItems()
         if not selected:
             return
         row = selected[0].row()
-        text_item = self.uncat_table.item(row, 1)
-        if not text_item:
+        rows_item = self.uncat_table.item(row, 0)
+        payload = rows_item.data(Qt.UserRole) if rows_item else None
+        if not isinstance(payload, dict):
             return
-        words = re.findall(r"[\w./-]{4,}", text_item.text(), flags=re.UNICODE)
-        self.new_pattern.setText(re.escape(words[0]) if words else re.escape(text_item.text()[:80]))
+        merchant = str(payload.get("merchant", "")).strip()
+        suggestion = str(payload.get("suggestion", "")).strip()
+        example = str(payload.get("example", "")).strip()
+        if merchant and merchant != "Unknown":
+            self.new_pattern.setText(re.escape(merchant))
+            self.new_merchant.setText(merchant)
+        else:
+            words = re.findall(r"[\w./-]{4,}", example, flags=re.UNICODE)
+            self.new_pattern.setText(re.escape(words[0]) if words else re.escape(example[:80]))
+            self.new_merchant.clear()
+        if suggestion and suggestion != "Other":
+            self.new_category.setText(suggestion)
 
     def add_rule_from_fields(self) -> None:
         pattern = self.new_pattern.text().strip()
         category = self.new_category.text().strip()
+        merchant = self.new_merchant.text().strip()
         if not pattern or not category:
             QMessageBox.warning(self, "Missing rule", "Enter both a pattern and a category.")
             return
@@ -921,11 +1019,15 @@ class CashflowWindow(QMainWindow):
         except re.error as exc:
             QMessageBox.warning(self, "Invalid regex", str(exc))
             return
-        self.rules.append({"pattern": pattern, "category": category})
+        rule = {"pattern": pattern, "category": category}
+        if merchant:
+            rule["merchant"] = merchant
+        self.rules.append(rule)
         save_rules(self.rules)
         self.populate_rules_table()
         self.new_pattern.clear()
         self.new_category.clear()
+        self.new_merchant.clear()
         self.refresh_plot()
 
     def populate_rules_table(self) -> None:
@@ -933,6 +1035,7 @@ class CashflowWindow(QMainWindow):
         for row, rule in enumerate(self.rules):
             self.rules_table.setItem(row, 0, QTableWidgetItem(rule.get("pattern", "")))
             self.rules_table.setItem(row, 1, QTableWidgetItem(rule.get("category", "")))
+            self.rules_table.setItem(row, 2, QTableWidgetItem(rule.get("merchant", "")))
 
     def remove_selected_rules(self) -> None:
         rows = sorted({item.row() for item in self.rules_table.selectedItems()}, reverse=True)
@@ -944,15 +1047,20 @@ class CashflowWindow(QMainWindow):
         for row in range(self.rules_table.rowCount()):
             pattern_item = self.rules_table.item(row, 0)
             category_item = self.rules_table.item(row, 1)
+            merchant_item = self.rules_table.item(row, 2)
             pattern = pattern_item.text().strip() if pattern_item else ""
             category = category_item.text().strip() if category_item else ""
+            merchant = merchant_item.text().strip() if merchant_item else ""
             if pattern and category:
                 try:
                     re.compile(pattern, flags=re.IGNORECASE)
                 except re.error as exc:
                     QMessageBox.warning(self, "Invalid regex", f"Row {row + 1}: {exc}")
                     return
-                rules.append({"pattern": pattern, "category": category})
+                rule = {"pattern": pattern, "category": category}
+                if merchant:
+                    rule["merchant"] = merchant
+                rules.append(rule)
         self.rules = rules
         save_rules(self.rules)
         self.refresh_plot()
