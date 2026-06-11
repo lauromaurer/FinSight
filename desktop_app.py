@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QButtonGroup,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -135,6 +136,22 @@ QPushButton#Secondary {
 QPushButton#Secondary:hover {
     background: #cbd5e1;
 }
+QPushButton#NavButton {
+    background: transparent;
+    color: #cbd5e1;
+    text-align: left;
+    padding: 10px 12px;
+    border-radius: 6px;
+    font-weight: 600;
+}
+QPushButton#NavButton:hover {
+    background: #1e293b;
+    color: #f8fafc;
+}
+QPushButton#NavButton:checked {
+    background: #2563eb;
+    color: #ffffff;
+}
 QLineEdit, QComboBox, QSpinBox {
     background: white;
     border: 1px solid #cbd5e1;
@@ -218,6 +235,19 @@ class CashflowWindow(QMainWindow):
         self.open_button = QPushButton("Load CSV")
         self.open_button.clicked.connect(self.open_csv)
         layout.addWidget(self.open_button)
+
+        self.nav_group = QButtonGroup(side)
+        self.nav_group.setExclusive(True)
+        self.nav_buttons = []
+        for index, label in enumerate(["Dashboard", "Plot", "Categorize", "Rules", "Data", "Settings"]):
+            button = QPushButton(label)
+            button.setObjectName("NavButton")
+            button.setCheckable(True)
+            button.clicked.connect(lambda checked=False, i=index: self.show_page(i))
+            self.nav_group.addButton(button, index)
+            self.nav_buttons.append(button)
+            layout.addWidget(button)
+        self.nav_buttons[0].setChecked(True)
         layout.addStretch(1)
         return side
 
@@ -228,7 +258,7 @@ class CashflowWindow(QMainWindow):
         layout.setSpacing(0)
 
         self.tabs = QTabWidget()
-        self.tabs.setTabPosition(QTabWidget.West)
+        self.tabs.tabBar().hide()
         self.dashboard_tab = QWidget()
         self.chart_tab = QWidget()
         self.categorize_tab = QWidget()
@@ -242,6 +272,7 @@ class CashflowWindow(QMainWindow):
         self.tabs.addTab(self.data_tab, "Data")
         self.tabs.addTab(self.settings_tab, "Settings")
         layout.addWidget(self.tabs, stretch=1)
+        self.tabs.currentChanged.connect(self.sync_sidebar_navigation)
 
         self._build_dashboard_tab()
         self._build_chart_tab()
@@ -250,6 +281,14 @@ class CashflowWindow(QMainWindow):
         self._build_data_tab()
         self._build_settings_tab()
         return main
+
+    def show_page(self, index: int) -> None:
+        if hasattr(self, "tabs"):
+            self.tabs.setCurrentIndex(index)
+
+    def sync_sidebar_navigation(self, index: int) -> None:
+        if hasattr(self, "nav_buttons") and 0 <= index < len(self.nav_buttons):
+            self.nav_buttons[index].setChecked(True)
 
     def _metric_card(self, label: str, value: str) -> QFrame:
         card = QFrame()
