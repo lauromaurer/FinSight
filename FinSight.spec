@@ -32,7 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['assets\\logo.ico'],
+    icon=['assets/logo.icns'],
 )
 coll = COLLECT(
     exe,
@@ -42,4 +42,10 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='FinSight',
+)
+app = BUNDLE(
+    coll,
+    name='FinSight.app',
+    icon='assets/logo.icns',
+    bundle_identifier=None,
 )
