@@ -1,74 +1,81 @@
 # FinSight
 
-A desktop app for turning card transaction CSV exports into an interactive financial insight dashboard.
+A local desktop app that turns a monthly bank CSV export into a categorized
+spending dashboard and cash-flow diagram — no server, no cloud upload, all
+processing stays on your machine.
 
-The app keeps category rules locally, so you do not need to upload a `rules.json` file every time. It also reads bank CSV exports with descriptive metadata lines before the real header, so the CSV can be loaded without manual cleanup.
+## Overview
 
-## Features
+FinSight reads transaction exports from your bank's CSV download, auto-detects
+the delimiter/encoding/header row (bank exports often have a few descriptive
+lines before the real header, which trips up a plain `pd.read_csv`), and
+categorizes each transaction against a local rule set you build up over time.
+It's built for a simple monthly habit: at the end of the month, import that
+month's export and get an immediate read on where the money went — a KPI
+summary, a category breakdown, top merchants, a daily flow chart, and a
+Sankey-style diagram of income flowing through a cash-flow hub into expense
+categories. Everything (rules, categories, uploaded CSVs, generated plots) is
+kept in local folders next to the app, so nothing needs to be re-entered or
+re-uploaded between sessions.
 
-- Desktop GUI built with PySide6.
-- CSV import through a file picker.
-- Loaded CSV files are copied into `uploaded CSV files/` for local reuse.
-- Automatic delimiter, encoding, and header-row detection.
-- Local category rules in `config/rules.json`.
-- Rule editor for uncategorized transactions.
-- Interactive Plotly flow preview.
-- Dashboard tab with KPI cards, category spending, daily flow, top merchants, and uncategorized count.
-- One-click export to `generated Plots`.
-- HTML export by default, with PNG export when Kaleido is available.
+The project started as a Streamlit web prototype and was later rewritten as a
+PySide6 desktop app — running fully locally turned out simpler and more
+stable than routing personal financial data through a local web server, and
+it packages into a standalone Windows/macOS app that doesn't need Python
+installed to run.
 
-## Setup
+## Tech stack
 
-```powershell
+- **PySide6** — desktop GUI (chosen over the Streamlit prototype for a
+  fully local, no-server experience).
+- **pandas** — CSV parsing, delimiter/encoding detection, categorization,
+  and aggregation.
+- **Plotly** (+ **Kaleido** for static export) — the interactive cash-flow
+  diagram, embedded in-app via Qt WebEngine when available, or opened as a
+  local HTML file otherwise.
+- **PyInstaller** — packages the app into a standalone `.exe` (Windows) or
+  `.app` (macOS) bundle.
+
+## How it works
+
+1. **Import** — pick a CSV via the file picker; it's copied into
+   `uploaded CSV files/` for local reuse and re-analysis without re-picking
+   the file.
+2. **Parse** — `finsight_core.py` sniffs the separator, encoding, and how
+   many header/description rows to skip, then loads it into a DataFrame.
+   Inflow/outflow and text columns are guessed from common header names but
+   can be overridden.
+3. **Categorize** — each transaction's combined text columns are matched
+   against a local list of regex rules (`config/rules.json`, created on
+   first run from a small generic starter set). Matches assign a category
+   and, optionally, a normalized merchant name. Unmatched transactions land
+   in a review tab where you can categorize them and save the match as a new
+   rule for next time.
+4. **Visualize** — the Dashboard tab shows KPI cards (inflow/outflow/net),
+   category spending, top merchants, and a daily flow chart. The Chart tab
+   builds a Sankey diagram: income categories flow into a "Cash flow hub"
+   node, which flows out into expense categories, each node/link labeled
+   with its amount and share of the total.
+5. **Export** — save the current chart to `generated Plots/` as HTML by
+   default, or PNG when Kaleido is available.
+
+## Getting started
+
+```bash
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate      # .\.venv\Scripts\Activate.ps1 on Windows
 pip install -r requirements.txt
+python src/finsight/desktop_app.py
 ```
 
-## Run
+If your Python/Qt install has WebEngine available, the Plotly chart renders
+inside the app. Otherwise, use the **Open interactive preview** button — it
+opens the same chart as a local HTML file in your browser while the rest of
+the app (CSV import, categorization, rules) keeps working normally.
 
-```powershell
-python desktop_app.py
-```
+### Building a standalone app
 
-If your Python installation has Qt WebEngine available, the Plotly chart appears inside the app. Otherwise, use the **Open interactive preview** button; it opens a local HTML preview in your browser while keeping the CSV/rules workflow in the desktop app.
-
-## Project Files
-
-- `desktop_app.py` - desktop GUI.
-- `assets/logo.svg` - app logo and window icon.
-- `finsight_core.py` - CSV parsing, categorization, flow generation, rule persistence.
-- `default_categories.json` - tracked default category labels bundled into releases.
-- `config/rules.json` - created automatically on first run.
-- `generated Plots/` - created automatically for saved plots.
-- `uploaded CSV files/` - created automatically for local copies of loaded CSV files.
-
-
-## Windows App Package
-
-A Windows build can be created with:
-
-```powershell
-.\build_exe.bat
-```
-
-The packaged app is written to:
-
-```text
-dist\FinSight\FinSight.exe
-```
-
-For sharing with non-technical users, zip and share the whole `dist\FinSight\` folder. The current local release zip is created at:
-
-```text
-release\FinSight Windows.zip
-```
-
-Users should keep the extracted folder together because the exe depends on the bundled `_internal` files.
-
-## macOS App Package
-
-Build this on a macOS device:
+**macOS** (run on a Mac):
 
 ```bash
 python3 -m venv .venv
@@ -77,18 +84,49 @@ pip install -r requirements.txt
 ./build_mac.sh
 ```
 
-The packaged app is written to:
+Produces `dist/FinSight.app`, zipped to `release/FinSight macOS.zip`.
 
-```text
-dist/FinSight.app
+**Windows:**
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+.\build_exe.bat
 ```
 
-The shareable zip is created at:
+Produces `dist\FinSight\FinSight.exe`. Share the whole `dist\FinSight\`
+folder (or `release\FinSight Windows.zip`) — the `.exe` depends on the
+bundled `_internal` files next to it.
 
-```text
-release/FinSight macOS.zip
+## Project structure
+
+```
+FinSight/
+├── src/finsight/
+│   ├── desktop_app.py     # PySide6 GUI
+│   └── finsight_core.py   # CSV parsing, categorization, flow generation
+├── assets/                 # app logo/icon (svg, ico, icns)
+├── default_categories.json # starter category labels bundled into releases
+├── FinSight.spec            # PyInstaller build spec
+├── build_mac.sh / build_exe.bat
+└── config/, generated Plots/, uploaded CSV files/   # created on first run
 ```
 
-## Suggested Git Usage
+`config/`, `generated Plots/`, and `uploaded CSV files/` hold local rules and
+personal financial data — they're created automatically and excluded from
+git (see `.gitignore`).
 
-Transaction CSVs are personal financial data, so they are ignored by default. Keep anonymized sample files only if you intentionally want them in the repository.
+## Status / roadmap
+
+Actively used month by month for personal budgeting — at the end of each
+month I import that month's export and review the dashboard. It's a
+finished, working tool rather than a polished product: the currency display
+is hardcoded to CHF throughout the UI and chart code (a real limitation if
+you use a different currency — there's no settings/config for it yet), and
+the starter category rules are intentionally generic rather than tuned to
+any particular bank or country.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

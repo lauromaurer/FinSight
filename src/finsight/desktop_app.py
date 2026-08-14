@@ -772,14 +772,14 @@ class FinSightWindow(QMainWindow):
     def _suggest_category(self, merchant: str, text: str) -> str:
         sample = f"{merchant} {text}".lower()
         hints = [
-            ("Groceries", ["migros", "coop", "aldi", "lidl", "denner", "supermarkt", "market"]),
-            ("Food & Drink", ["restaurant", "cafe", "bar", "pizza", "kebab", "mcdonald", "burger", "bakery", "baeckerei"]),
-            ("Transport", ["sbb", "cff", "ffs", "bahn", "rail", "bus", "train", "ticket", "uber", "taxi"]),
-            ("Shopping", ["shop", "store", "amazon", "aliexpress", "zalando", "ikea", "galaxus"]),
-            ("Subscriptions", ["apple.com/bill", "spotify", "netflix", "subscription", "abo"]),
-            ("Telecom", ["yallo", "sunrise", "salt", "swisscom", "telecom"]),
-            ("Health", ["apotheke", "pharmacy", "arzt", "doctor", "hirslanden"]),
-            ("P2P", ["twint", "paypal"]),
+            ("Groceries", ["supermarket", "grocery", "market"]),
+            ("Food & Drink", ["restaurant", "cafe", "bar", "pizza", "kebab", "mcdonald", "burger", "bakery"]),
+            ("Transport", ["rail", "bus", "train", "ticket", "uber", "taxi"]),
+            ("Shopping", ["shop", "store", "amazon", "aliexpress", "ikea"]),
+            ("Subscriptions", ["apple.com/bill", "spotify", "netflix", "subscription"]),
+            ("Telecom", ["telecom", "mobile", "wireless"]),
+            ("Health", ["pharmacy", "doctor", "hospital", "clinic"]),
+            ("P2P", ["paypal"]),
         ]
         existing = set(self._category_names())
         for category, keywords in hints:

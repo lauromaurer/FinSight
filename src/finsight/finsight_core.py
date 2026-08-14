@@ -25,10 +25,9 @@ UPLOADS_DIR = APP_DIR / "uploaded CSV files"
 DEFAULT_CATEGORIES = ["P2P", "Transport", "Groceries", "Food & Drink"]
 
 DEFAULT_RULES = [
-    {"pattern": r"twint", "category": "P2P", "merchant": "TWINT"},
-    {"pattern": r"sbb|bahn|rail", "category": "Transport", "merchant": "SBB"},
-    {"pattern": r"coop|migros|aldi|lidl", "category": "Groceries"},
-    {"pattern": r"restaurant|cafe|bar|pizza|kebab", "category": "Food & Drink"},
+    {"pattern": r"restaurant|cafe|bar|pizza|kebab|bakery", "category": "Food & Drink"},
+    {"pattern": r"bus|train|rail|taxi|uber", "category": "Transport"},
+    {"pattern": r"paypal", "category": "P2P", "merchant": "PayPal"},
 ]
 
 

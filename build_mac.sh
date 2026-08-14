@@ -16,7 +16,7 @@ fi
   --icon "assets/logo.icns" \
   --add-data "assets:assets" \
   --add-data "default_categories.json:." \
-  desktop_app.py
+  src/finsight/desktop_app.py
 
 mkdir -p release
 rm -f "release/FinSight macOS.zip"

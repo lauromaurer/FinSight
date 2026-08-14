@@ -2,7 +2,7 @@
 
 
 a = Analysis(
-    ['desktop_app.py'],
+    ['src/finsight/desktop_app.py'],
     pathex=[],
     binaries=[],
     datas=[('assets', 'assets'), ('default_categories.json', '.')],
