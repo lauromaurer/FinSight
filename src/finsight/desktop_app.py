@@ -211,7 +211,6 @@ QHeaderView::section {
 """
 
 
-REVIEW_PAGE = 2
 SETTINGS_PAGE = 5
 REVIEW_COLUMNS = ["Merchant", "Transactions", "Total (CHF)", "Category", "", "Example"]
 CHOOSE_CATEGORY = "Choose a Category…"
@@ -1003,7 +1002,8 @@ class FinSightWindow(QMainWindow):
     def _update_review_badge(self) -> None:
         remaining = len(self.analysis.review_merchants) if self.analysis is not None else 0
         if hasattr(self, "nav_buttons"):
-            self.nav_buttons[REVIEW_PAGE].setText(f"Review ({remaining})" if remaining else "Review")
+            review_button = self.nav_buttons[self.tabs.indexOf(self.categorize_tab)]
+            review_button.setText(f"Review ({remaining})" if remaining else "Review")
         if hasattr(self, "review_status"):
             if self.analysis is None:
                 self.review_status.setText("Import a month to review its Uncategorized Merchants.")
