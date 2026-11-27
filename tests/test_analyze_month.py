@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from finsight.month_analysis import analyze_month, rule_for_merchant
+from finsight.month_analysis import ImportOverrides, analyze_month, rule_for_merchant
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 
@@ -108,6 +108,114 @@ def test_minimum_amount_drops_small_transactions_from_totals_categories_and_revi
     assert category_totals(analysis)["Uncategorized"] == (0.00, 1462.00)
     assert "Bank Fee" not in {m.merchant for m in analysis.review_merchants}
     assert "Bank Fee" not in {t.merchant for t in analysis.transactions}
+
+
+def test_comma_delimited_english_export_with_dot_decimals_and_comma_thousands():
+    analysis = analyze_month(fixture("comma_english.csv"), [{"pattern": "grocery", "category": "Groceries"}])
+
+    assert analysis.income == pytest.approx(3500.00)
+    assert analysis.expenses == pytest.approx(1313.70)
+    assert category_totals(analysis)["Groceries"] == (0.00, 56.20)
+    assert (str(analysis.start_date), str(analysis.end_date)) == ("2026-09-01", "2026-09-28")
+    assert analysis.settings.sep == ","
+    assert analysis.settings.decimal == "."
+
+
+def test_cp1252_export_with_comma_decimals_and_dot_thousands():
+    analysis = analyze_month(fixture("comma_decimal_cp1252.csv"), [])
+
+    assert analysis.income == pytest.approx(4250.00)
+    assert analysis.expenses == pytest.approx(1304.70)
+    assert {t.merchant for t in analysis.transactions} == {
+        "Bäckerei Müller Zürich",
+        "Lohn Firma Beispiel",
+        "Möbelhaus Grün",
+    }
+    assert analysis.settings.decimal == ","
+
+
+def test_amounts_with_chf_and_apostrophe_thousands_separators():
+    analysis = analyze_month(fixture("apostrophe_thousands_chf.csv"), [])
+
+    assert analysis.income == pytest.approx(6100.00)
+    assert analysis.expenses == pytest.approx(1257.85)
+
+
+def test_undetectable_columns_return_columns_need_checking_with_candidates_and_preview_rows():
+    analysis = analyze_month(fixture("undetectable_columns.csv"), RULES)
+
+    assert analysis.columns_need_checking
+    assert analysis.column_check.columns == ("Col1", "Col2", "Col3", "Col4")
+    assert analysis.column_check.preview_rows[0] == {
+        "Col1": "01.10.2026",
+        "Col2": "foo",
+        "Col3": "12.00",
+        "Col4": "bar",
+    }
+    assert analysis.transactions == ()
+    assert analysis.income == 0 and analysis.expenses == 0
+
+
+def test_import_overrides_choose_the_columns_when_detection_fails():
+    overrides = ImportOverrides(expenses_column="Col3", text_columns=("Col2",), date_column="Col1")
+    analysis = analyze_month(fixture("undetectable_columns.csv"), [], overrides=overrides)
+
+    assert not analysis.columns_need_checking
+    assert analysis.expenses == pytest.approx(19.50)
+    assert [(m.merchant, m.total) for m in analysis.review_merchants] == [("foo", 12.00), ("baz", 7.50)]
+    assert str(analysis.end_date) == "2026-10-02"
+
+
+def test_import_overrides_replace_detected_delimiter_decimal_and_header_row():
+    detected = german_month().settings
+    overrides = ImportOverrides(sep=detected.sep, decimal=",", header_row=detected.header_row)
+
+    analysis = german_month(overrides=overrides)
+
+    assert analysis.settings.decimal == ","
+    # "-3.80" read with a decimal comma treats the dot as a thousands mark: 380.
+    assert {t.merchant: t.expenses for t in analysis.transactions}["SBB CFF FFS"] == pytest.approx(380)
+
+
+def flow_amounts(analysis) -> dict[tuple[str, str], float]:
+    labels = {node.id: node.label for node in analysis.money_flow.nodes}
+    return {(labels[link.source], labels[link.target]): round(link.amount, 2) for link in analysis.money_flow.links}
+
+
+def test_money_flow_carries_each_category_into_and_out_of_the_month_with_saved():
+    analysis = german_month()
+
+    assert flow_amounts(analysis) == {
+        ("Salary", "October 2026"): 5200.00,
+        ("P2P", "October 2026"): 40.00,
+        ("October 2026", "Uncategorized"): 1462.50,
+        ("October 2026", "Groceries"): 126.45,
+        ("October 2026", "Other"): 60.00,
+        ("October 2026", "P2P"): 25.00,
+        ("October 2026", "Food & Drink"): 18.50,
+        ("October 2026", "Transport"): 3.80,
+        ("October 2026", "Saved"): 3543.75,
+    }
+
+
+def test_money_flow_and_category_table_agree_for_every_category():
+    analysis = german_month(minimum_amount=1.0)
+    links = analysis.money_flow.links
+    nodes = {node.id: node for node in analysis.money_flow.nodes}
+
+    for total in analysis.categories:
+        flowed_in = sum(l.amount for l in links if nodes[l.source].label == total.category and nodes[l.source].side == "income")
+        flowed_out = sum(l.amount for l in links if nodes[l.target].label == total.category and nodes[l.target].side == "expenses")
+        assert flowed_in == pytest.approx(total.income)
+        assert flowed_out == pytest.approx(total.expenses)
+
+
+def test_money_flow_shows_overspent_when_expenses_exceed_income():
+    overrides = ImportOverrides(expenses_column="Col3", text_columns=("Col2",), date_column="Col1")
+    analysis = analyze_month(fixture("undetectable_columns.csv"), [], overrides=overrides)
+
+    assert analysis.saved == pytest.approx(-19.50)
+    assert flow_amounts(analysis)[("Overspent", "October 2026")] == 19.50
 
 
 def test_the_month_date_range_comes_from_the_transaction_dates():
