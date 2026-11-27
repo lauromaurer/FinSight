@@ -1,0 +1,5 @@
+Date,Description,Reference,Debit,Credit,Balance
+2026-09-01,ACME Corp Payroll,REF001,,"3,500.00","4,500.00"
+2026-09-03,City Grocery Store,REF002,56.20,,"4,443.80"
+2026-09-15,Furniture Warehouse,REF003,"1,234.50",,"3,209.30"
+2026-09-28,Uber Trip,REF004,23.00,,"3,186.30"
