@@ -45,3 +45,19 @@ def test_self_check_leaves_the_launch_folder_untouched(tmp_path):
     run_app([str(APP_SCRIPT)], cwd=tmp_path)
 
     assert list(tmp_path.iterdir()) == []
+
+
+def test_self_check_names_the_data_folder_without_writing_to_it(tmp_path):
+    home = tmp_path / "home"
+    appdata = tmp_path / "appdata"
+    launch = tmp_path / "launch"
+    launch.mkdir()
+    fake_user = {"HOME": str(home), "USERPROFILE": str(home), "APPDATA": str(appdata), "XDG_DATA_HOME": str(home)}
+
+    result = run_app([str(APP_SCRIPT)], cwd=launch, extra_env=fake_user)
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    data_folders = [appdata / "FinSight", home / "Library" / "Application Support" / "FinSight", home / "FinSight"]
+    assert any(f"Data folder: {folder}" in result.stdout for folder in data_folders), result.stdout
+    assert not any(folder.exists() for folder in data_folders)
+    assert list(launch.iterdir()) == []
