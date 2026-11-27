@@ -5,6 +5,7 @@ import json
 import pytest
 
 from finsight.data_store import DataStore, header_fingerprint, user_data_folder
+from finsight.month_analysis import analyze_month
 
 
 def test_rules_round_trip_through_the_store(tmp_path):
@@ -204,3 +205,50 @@ def test_the_same_header_row_gives_the_same_fingerprint(tmp_path):
 
     assert exported_in_october == exported_in_november
     assert exported_in_october != other_bank
+
+
+REVIEW_CSV = b"""Date,Description,Debit,Credit
+2026-10-01,Shop+Co (Zurich) A.G.,40.00,
+2026-10-03,Corner Kiosk,12.00,
+"""
+
+
+def test_categorizing_a_merchant_in_review_saves_a_rule_the_next_import_applies(tmp_path):
+    DataStore(tmp_path).save_rules([{"pattern": "migros", "category": "Groceries"}])
+
+    DataStore(tmp_path).categorize_merchant("Shop+Co (Zurich) A.G.", "Shopping")
+
+    next_month = analyze_month(REVIEW_CSV, DataStore(tmp_path).load_rules())
+    assert {t.merchant: t.category for t in next_month.transactions} == {
+        "Shop+Co (Zurich) A.G.": "Shopping",
+        "Corner Kiosk": "Uncategorized",
+    }
+    assert [m.merchant for m in next_month.review_merchants] == ["Corner Kiosk"]
+    assert DataStore(tmp_path).load_rules()[0] == {"pattern": "migros", "category": "Groceries"}
+
+
+def test_categorizing_a_merchant_returns_the_saved_rules_with_the_merchant_name(tmp_path):
+    rules = DataStore(tmp_path).categorize_merchant("Corner Kiosk", "Food & Drink")
+
+    assert rules == DataStore(tmp_path).load_rules()
+    assert rules[-1]["merchant"] == "Corner Kiosk"
+    assert rules[-1]["category"] == "Food & Drink"
+
+
+def test_categorizing_a_merchant_again_replaces_its_earlier_rule(tmp_path):
+    store = DataStore(tmp_path)
+    store.categorize_merchant("Corner Kiosk", "Food & Drink")
+
+    rules = store.categorize_merchant("Corner Kiosk", "Groceries")
+
+    assert [r["category"] for r in rules if r.get("merchant") == "Corner Kiosk"] == ["Groceries"]
+
+
+def test_a_new_category_picked_in_review_is_saved_but_other_is_not_added(tmp_path):
+    store = DataStore(tmp_path)
+    store.save_categories(["Groceries"])
+
+    store.categorize_merchant("Corner Kiosk", "Snacks")
+    store.categorize_merchant("Shop+Co (Zurich) A.G.", "Other")
+
+    assert DataStore(tmp_path).load_categories() == ["Groceries", "Snacks"]
