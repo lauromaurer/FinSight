@@ -16,6 +16,8 @@ import pandas as pd
 
 UNCATEGORIZED = "Uncategorized"
 OTHER = "Other"
+# Merchant shown for a transaction with no description text.
+NO_DESCRIPTION = "(no description)"
 PREVIEW_ROW_COUNT = 5
 
 
@@ -83,7 +85,7 @@ class ReviewMerchant:
 
     merchant: str
     count: int
-    total: float
+    total: float  # net spend: Expenses minus Income (refunds shrink it; negative if money came in)
     suggested_category: str
     example: str
 
@@ -340,13 +342,13 @@ def _review_merchants(transactions: list[Transaction], categories: set[str]) -> 
         ReviewMerchant(
             merchant=merchant,
             count=len(items),
-            total=sum(t.income + t.expenses for t in items),
+            total=sum(t.expenses - t.income for t in items),
             suggested_category=_suggest_category(merchant, items[0].text, categories),
             example=items[0].text,
         )
         for merchant, items in groups.items()
     ]
-    return tuple(sorted(merchants, key=lambda m: (-m.total, -m.count, m.merchant)))
+    return tuple(sorted(merchants, key=lambda m: (-abs(m.total), -m.count, m.merchant)))
 
 
 def _category_totals(transactions: list[Transaction]) -> tuple[CategoryTotal, ...]:
@@ -466,7 +468,7 @@ def analyze_month(
         parts = [_clean(row[c]) for c in text_columns]
         text = " ".join(p for p in parts if p)
         category, rule_merchant = categorizer.categorize(text)
-        merchant = rule_merchant or next((p for p in parts if p), "") or "Unknown"
+        merchant = rule_merchant or next((p for p in parts if p), "") or NO_DESCRIPTION
         transactions.append(
             Transaction(None if pd.isna(when) else when.date(), text, merchant[:80], category, income, expense)
         )

@@ -1,6 +1,7 @@
 """UI text follows GLOSSARY.md: no string the user can see uses a term listed under _Avoid_.
 
-Cheap check: scans the string literals of the UI modules (docstrings excluded).
+Cheap check: scans the string literals of the UI modules and of month_analysis
+(whose Merchant and Category names reach the UI), docstrings excluded.
 A literal counts as UI text when it has a space or starts with a capital letter,
 which skips dict keys such as "pattern".
 """
@@ -12,7 +13,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-UI_MODULES = ["desktop_app.py", "check_columns.py", "money_flow_chart.py"]
+UI_MODULES = ["desktop_app.py", "check_columns.py", "money_flow_chart.py", "month_analysis.py"]
 
 # Glossary _Avoid_ terms. "Other"/"Uncategorized" are left out: each is a real
 # term that the glossary only forbids in the other's meaning.

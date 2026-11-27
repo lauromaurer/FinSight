@@ -289,3 +289,24 @@ def test_share_of_expenses_is_zero_when_a_month_has_no_expenses():
     analysis = german_month(rules=RULES, minimum_amount=5000)
 
     assert [(c.category, c.expense_share) for c in analysis.categories] == [("Salary", 0.0)]
+
+
+REFUNDS_CSV = b"""Date,Description,Debit,Credit
+2026-09-01,Kiosk,30.00,
+2026-09-02,Online Shop,100.00,
+2026-09-03,Online Shop,,80.00
+2026-09-04,Jane Doe,,50.00
+2026-09-05,,5.00,
+"""
+
+
+def test_review_totals_are_net_spend_so_refunds_shrink_a_merchant_largest_first_either_way():
+    analysis = analyze_month(REFUNDS_CSV, [])
+
+    review = [(m.merchant, m.count, round(m.total, 2)) for m in analysis.review_merchants]
+    assert review == [
+        ("Jane Doe", 1, -50.00),
+        ("Kiosk", 1, 30.00),
+        ("Online Shop", 2, 20.00),
+        ("(no description)", 1, 5.00),
+    ]
