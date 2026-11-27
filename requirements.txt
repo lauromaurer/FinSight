@@ -2,5 +2,4 @@ pandas
 plotly
 PySide6
 PySide6_Addons
-kaleido
 pyinstaller

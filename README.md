@@ -30,9 +30,9 @@ installed to run.
   fully local, no-server experience).
 - **pandas** — CSV parsing, delimiter/encoding detection, categorization,
   and aggregation.
-- **Plotly** — the interactive Money flow
-  diagram, embedded in-app via Qt WebEngine when available, or opened as a
-  local HTML file otherwise.
+- **Plotly** — the interactive Money flow diagram, embedded in-app via Qt
+  WebEngine when available, or opened as a local HTML file otherwise; it is
+  exported as HTML.
 - **PyInstaller** — packages the app into a standalone `.exe` (Windows) or
   `.app` (macOS) bundle.
 
@@ -87,31 +87,47 @@ inside the app. Otherwise, use the **Open Money flow** button — it
 opens the same diagram as a local HTML file in your browser while the rest of
 the app (CSV import, categorization, rules) keeps working normally.
 
-### Building a standalone app
+### Releases
 
-**macOS** (run on a Mac):
+Releases are built by CI. Pushing a version tag builds both platforms:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-./build_mac.sh
+git tag v1.1
+git push origin v1.1
 ```
 
-Produces `dist/FinSight.app`, zipped to `release/FinSight macOS.zip`.
+`.github/workflows/release.yml` then, on `windows-latest` and `macos-latest`:
 
-**Windows:**
+1. builds the app from the one shared build definition, `FinSight.spec`;
+2. runs the built app's `--self-check` (`tests/test_frozen_app.py`);
+3. zips each build (`FinSight-v1.1-Windows.zip`, `FinSight-v1.1-macOS.zip`);
+4. creates a GitHub Release for the tag with both zips attached.
+
+If either built app fails its self-check, the workflow fails and no Release
+is published. Running the workflow by hand (Actions → Release → Run workflow)
+or pushing a branch that changes `FinSight.spec`, `requirements.txt` or the
+workflow is a dry run: same build and self-check, with the zips kept as
+workflow artifacts and no Release. Build output (`build/`, `dist/`,
+`release/`) is git-ignored and never committed. The Windows zip holds the
+`FinSight` folder: keep `FinSight.exe` next to its `_internal` folder. The
+builds are not code-signed, so macOS Gatekeeper and Windows SmartScreen warn
+on first launch.
+
+### Building a standalone app by hand
+
+Both scripts just run `FinSight.spec` from a local `.venv` and zip the result
+into `release/`:
+
+```bash
+./build_mac.sh        # macOS   -> dist/FinSight.app, release/FinSight macOS.zip
+```
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-.\build_exe.bat
+.\build_exe.bat      # Windows -> dist\FinSight\FinSight.exe, release\FinSight Windows.zip
 ```
 
-Produces `dist\FinSight\FinSight.exe`. Share the whole `dist\FinSight\`
-folder (or `release\FinSight Windows.zip`) — the `.exe` depends on the
-bundled `_internal` files next to it.
+To self-check a local build:
+`FINSIGHT_FROZEN_APP=dist/FinSight.app/Contents/MacOS/FinSight python -m pytest tests/test_frozen_app.py`.
 
 ## Project structure
 
@@ -128,7 +144,7 @@ FinSight/
 ├── assets/                 # app logo/icon (svg, ico, icns)
 ├── default_categories.json # starter Categories bundled into releases
 ├── tests/                  # pytest suite
-├── FinSight.spec            # PyInstaller build spec
+├── FinSight.spec            # the one PyInstaller build spec (Windows + macOS)
 └── build_mac.sh / build_exe.bat
 ```
 
