@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -23,6 +24,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -52,6 +54,7 @@ from finsight.finsight_core import (
     BUNDLE_DIR,
     DEFAULT_CATEGORIES_PATH,
 )
+from finsight.check_columns import CheckColumnsDialog
 from finsight.data_store import DataStore, open_user_store, user_data_folder
 from finsight.money_flow_chart import money_flow_figure
 from finsight.month_analysis import (
@@ -230,6 +233,8 @@ class FinSightWindow(QMainWindow):
         self.analysis: MonthAnalysis | None = None
         self.current_csv: Path | None = None
         self.source_csv: Path | None = None
+        # Overrides this month was Imported with (remembered or confirmed in Check your columns).
+        self.import_overrides = ImportOverrides()
         self.current_fig = None
 
         root = QWidget()
@@ -627,12 +632,13 @@ class FinSightWindow(QMainWindow):
 
     def _overrides(self, include_columns: bool) -> ImportOverrides:
         """Import overrides from the Settings page. Columns only once the user has seen them."""
+        base = self.import_overrides
         sep = self.sep_box.currentText()
-        sep = None if sep == "Auto" else ("\t" if sep == "\\t" else sep)
-        decimal = None if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
-        header_row = None if self.skip_auto.isChecked() else self.skip_rows.value()
+        sep = base.sep if sep == "Auto" else ("\t" if sep == "\\t" else sep)
+        decimal = base.decimal if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
+        header_row = base.header_row if self.skip_auto.isChecked() else self.skip_rows.value()
         if not include_columns:
-            return ImportOverrides(sep=sep, decimal=decimal, header_row=header_row)
+            return replace(base, sep=sep, decimal=decimal, header_row=header_row)
         return ImportOverrides(
             sep=sep,
             decimal=decimal,
@@ -658,19 +664,97 @@ class FinSightWindow(QMainWindow):
             return False
         return True
 
+    def _analyze_import(self, data: bytes) -> tuple[MonthAnalysis, ImportOverrides]:
+        """Analyze an Imported CSV, applying the choices remembered for its bank format.
+
+        Raises UnreadableCsvError when the file isn't a readable CSV.
+        """
+        options = {"categories": self._category_names(), "minimum_amount": float(self.min_amount.value())}
+        analysis = analyze_month(data, self.rules, **options)
+        remembered = self.store.remembered_import_overrides(analysis.columns)
+        if remembered is None:
+            return analysis, ImportOverrides()
+        return analyze_month(data, self.rules, remembered, **options), remembered
+
     def open_csv(self) -> None:
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open transactions CSV", "", "CSV Files (*.csv);;All Files (*)")
+        """Import: pick a CSV; only ask about columns when they can't be detected.
+
+        The current month is replaced only once the new one is ready; an unreadable
+        file or a cancelled Check your columns leaves it untouched.
+        """
+        file_name, _ = QFileDialog.getOpenFileName(self, "Import a month", "", "CSV Files (*.csv);;All Files (*)")
         if not file_name:
             return
         source = Path(file_name)
         try:
-            self.source_csv = source
-            self.current_csv = self.store.save_import(source)
-            self.store.remember_last_import(self.current_csv)
-        except Exception as exc:
+            data = source.read_bytes()
+            analysis, overrides = self._analyze_import(data)
+        except (OSError, UnreadableCsvError) as exc:
+            QMessageBox.critical(
+                self,
+                "Can't read this file",
+                f"FinSight couldn't read {source.name} as a bank CSV export.\n"
+                f"Your current month is unchanged.\n\nDetails: {exc}",
+            )
+            return
+        if analysis.columns_need_checking:
+            dialog = CheckColumnsDialog(
+                data,
+                self.rules,
+                analysis,
+                categories=self._category_names(),
+                minimum_amount=float(self.min_amount.value()),
+                parent=self,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+            self.store.remember_import_overrides(analysis.columns, dialog.overrides)
+            analysis, overrides = dialog.analysis, dialog.overrides
+        try:
+            copy = self.store.save_import(source)
+            self.store.remember_last_import(copy)
+        except OSError as exc:
             QMessageBox.critical(self, "CSV storage error", f"Could not save a local copy of the CSV:\n{exc}")
             return
-        self.reload_csv()
+        self._show_month(data, analysis, overrides, copy, source)
+        self.show_page(0)
+
+    def reopen_last_import(self) -> None:
+        """On launch, reopen the last Imported month (silently skipped if it can't be)."""
+        copy = self.store.last_import()
+        if copy is None:
+            return
+        try:
+            data = copy.read_bytes()
+            analysis, overrides = self._analyze_import(data)
+        except (OSError, UnreadableCsvError):
+            return
+        if not analysis.columns_need_checking:
+            self._show_month(data, analysis, overrides, copy, None)
+
+    def _show_month(
+        self,
+        data: bytes,
+        analysis: MonthAnalysis,
+        overrides: ImportOverrides,
+        copy: Path,
+        source: Path | None,
+    ) -> None:
+        """Make this the current month (replacing any previous one) and draw it."""
+        self.csv_bytes = data
+        self.analysis = analysis
+        self.import_overrides = overrides
+        self.current_csv = copy
+        self.source_csv = source
+        self.sep_box.setCurrentText("Auto")
+        self.decimal_box.setCurrentText("Auto")
+        self.skip_auto.setChecked(True)
+        self.file_label.setText(str(source or copy))
+        self.uploaded_file_label.setText(str(copy))
+        self.populate_columns()
+        self.populate_preview()
+        self._set_ready_state(True)
+        self.render_analysis()
 
     def open_data_folder(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)
@@ -1140,6 +1224,7 @@ def main(argv: list[str] | None = None) -> int:
         app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)
     window = FinSightWindow(open_user_store())
+    window.reopen_last_import()
     window.show()
     return app.exec()
 

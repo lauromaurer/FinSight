@@ -180,8 +180,19 @@ def _decode(data: bytes) -> tuple[str, str]:
     return data.decode("latin-1"), "latin-1"
 
 
+def _looks_binary(text: str) -> bool:
+    """A PDF, spreadsheet or other binary file rather than a text export."""
+    sample = text[:10_000]
+    if "\x00" in sample:
+        return True
+    control = sum(1 for ch in sample if ord(ch) < 32 and ch not in "\t\r\n\f")
+    return control > len(sample) * 0.01
+
+
 def _read_table(data: bytes, overrides: ImportOverrides) -> tuple[pd.DataFrame, str, str, int]:
     text, encoding = _decode(data)
+    if _looks_binary(text):
+        raise UnreadableCsvError("this is not a text file")
     sep = overrides.sep or _detect_sep(text[:10_000])
     header_row = overrides.header_row if overrides.header_row is not None else _detect_header_row(text, sep)
     try:
