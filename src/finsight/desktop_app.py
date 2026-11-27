@@ -6,6 +6,7 @@ import re
 import shutil
 import sys
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -29,6 +30,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -53,15 +55,17 @@ from finsight.finsight_core import (
     BUNDLE_DIR,
     DEFAULT_CATEGORIES_PATH,
 )
+from finsight.check_columns import CheckColumnsDialog
 from finsight.data_store import DataStore, open_user_store, user_data_folder
 from finsight.money_flow_chart import money_flow_figure
 from finsight.month_analysis import (
     OTHER,
+    UNCATEGORIZED,
     ImportOverrides,
     MonthAnalysis,
+    ReviewMerchant,
     UnreadableCsvError,
     analyze_month,
-    rule_for_merchant,
 )
 
 
@@ -216,6 +220,9 @@ QHeaderView::section {
 
 
 SETTINGS_PAGE = 4
+REVIEW_COLUMNS = ["Merchant", "Transactions", "Total (CHF)", "Category", "", "Example"]
+CHOOSE_CATEGORY = "Choose a Category…"
+NEW_CATEGORY = "New Category…"
 
 
 def _chf(amount: float) -> str:
@@ -233,14 +240,13 @@ class FinSightWindow(QMainWindow):
         self.resize(1320, 850)
 
         self.rules = store.load_rules()
-        rule_categories = [rule.get("category", "").strip() for rule in self.rules]
-        self.categories = sorted(
-            dict.fromkeys(c for c in [*store.load_categories(), *rule_categories] if c and c != "Other")
-        )
+        self.categories = self._merged_categories()
         self.csv_bytes: bytes | None = None
         self.analysis: MonthAnalysis | None = None
         self.current_csv: Path | None = None
         self.source_csv: Path | None = None
+        # Overrides this month was Imported with (remembered or confirmed in Check your columns).
+        self.import_overrides = ImportOverrides()
         self.current_fig = None
 
         root = QWidget()
@@ -252,6 +258,7 @@ class FinSightWindow(QMainWindow):
         layout.addWidget(self._build_sidebar())
         layout.addWidget(self._build_main(), stretch=1)
         self._set_ready_state(False)
+        self._update_review_badge()
 
     def _build_sidebar(self) -> QWidget:
         side = QFrame()
@@ -406,44 +413,28 @@ class FinSightWindow(QMainWindow):
         layout = QVBoxLayout(self.categorize_tab)
         layout.setContentsMargins(8, 8, 8, 8)
         top = QHBoxLayout()
+        self.review_status = QLabel("Import a month to review its Uncategorized Merchants.")
+        top.addWidget(self.review_status, stretch=1)
         self.search_box = QLineEdit()
-        self.search_box.setPlaceholderText("Search uncategorized transactions")
+        self.search_box.setPlaceholderText("Search Merchants or transaction text")
         self.search_box.textChanged.connect(self.refresh_uncategorized)
         top.addWidget(self.search_box, stretch=1)
         layout.addLayout(top)
 
-        self.uncat_table = QTableWidget(0, 5)
-        self.uncat_table.setHorizontalHeaderLabels(["Rows", "Merchant", "Suggested Category", "Example Text", "Total Amount"])
-        self.uncat_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.uncat_table = QTableWidget(0, len(REVIEW_COLUMNS))
+        self.uncat_table.setHorizontalHeaderLabels(REVIEW_COLUMNS)
+        self.uncat_table.horizontalHeader().setSectionResizeMode(REVIEW_COLUMNS.index("Example"), QHeaderView.Stretch)
         self.uncat_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.uncat_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.uncat_table.verticalHeader().setVisible(False)
         layout.addWidget(self.uncat_table, stretch=1)
 
-        add = QFrame()
-        add.setObjectName("Panel")
-        add_layout = QGridLayout(add)
-        add_layout.setContentsMargins(14, 12, 14, 12)
-        self.new_pattern = QLineEdit()
-        self.new_pattern.setPlaceholderText("Regex or merchant keyword")
-        self.new_category = QComboBox()
-        self.new_category.setEditable(False)
-        self.populate_category_combo()
-        self.new_merchant = QLineEdit()
-        self.new_merchant.setPlaceholderText("Merchant alias")
-        pick_button = QPushButton("Use selected text")
-        pick_button.setObjectName("Secondary")
-        pick_button.clicked.connect(self.use_selected_uncategorized)
-        add_button = QPushButton("Save assignment")
-        add_button.clicked.connect(self.add_rule_from_fields)
-        add_layout.addWidget(QLabel("Pattern"), 0, 0)
-        add_layout.addWidget(QLabel("Category"), 0, 1)
-        add_layout.addWidget(QLabel("Merchant"), 0, 2)
-        add_layout.addWidget(self.new_pattern, 1, 0)
-        add_layout.addWidget(self.new_category, 1, 1)
-        add_layout.addWidget(self.new_merchant, 1, 2)
-        add_layout.addWidget(pick_button, 1, 3)
-        add_layout.addWidget(add_button, 1, 4)
-        layout.addWidget(add)
+        hint = QLabel(
+            "Pick a Category for a Merchant to file it there from now on. "
+            "Review is optional: anything left here shows as Uncategorized on the Dashboard."
+        )
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
 
     def _build_rules_tab(self) -> None:
         layout = QVBoxLayout(self.rules_tab)
@@ -611,12 +602,13 @@ class FinSightWindow(QMainWindow):
 
     def _overrides(self, include_columns: bool) -> ImportOverrides:
         """Import overrides from the Settings page. Columns only once the user has seen them."""
+        base = self.import_overrides
         sep = self.sep_box.currentText()
-        sep = None if sep == "Auto" else ("\t" if sep == "\\t" else sep)
-        decimal = None if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
-        header_row = None if self.skip_auto.isChecked() else self.skip_rows.value()
+        sep = base.sep if sep == "Auto" else ("\t" if sep == "\\t" else sep)
+        decimal = base.decimal if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
+        header_row = base.header_row if self.skip_auto.isChecked() else self.skip_rows.value()
         if not include_columns:
-            return ImportOverrides(sep=sep, decimal=decimal, header_row=header_row)
+            return replace(base, sep=sep, decimal=decimal, header_row=header_row)
         return ImportOverrides(
             sep=sep,
             decimal=decimal,
@@ -642,19 +634,97 @@ class FinSightWindow(QMainWindow):
             return False
         return True
 
+    def _analyze_import(self, data: bytes) -> tuple[MonthAnalysis, ImportOverrides]:
+        """Analyze an Imported CSV, applying the choices remembered for its bank format.
+
+        Raises UnreadableCsvError when the file isn't a readable CSV.
+        """
+        options = {"categories": self._category_names(), "minimum_amount": float(self.min_amount.value())}
+        analysis = analyze_month(data, self.rules, **options)
+        remembered = self.store.remembered_import_overrides(analysis.columns)
+        if remembered is None:
+            return analysis, ImportOverrides()
+        return analyze_month(data, self.rules, remembered, **options), remembered
+
     def open_csv(self) -> None:
-        file_name, _ = QFileDialog.getOpenFileName(self, "Open transactions CSV", "", "CSV Files (*.csv);;All Files (*)")
+        """Import: pick a CSV; only ask about columns when they can't be detected.
+
+        The current month is replaced only once the new one is ready; an unreadable
+        file or a cancelled Check your columns leaves it untouched.
+        """
+        file_name, _ = QFileDialog.getOpenFileName(self, "Import a month", "", "CSV Files (*.csv);;All Files (*)")
         if not file_name:
             return
         source = Path(file_name)
         try:
-            self.source_csv = source
-            self.current_csv = self.store.save_import(source)
-            self.store.remember_last_import(self.current_csv)
-        except Exception as exc:
+            data = source.read_bytes()
+            analysis, overrides = self._analyze_import(data)
+        except (OSError, UnreadableCsvError) as exc:
+            QMessageBox.critical(
+                self,
+                "Can't read this file",
+                f"FinSight couldn't read {source.name} as a bank CSV export.\n"
+                f"Your current month is unchanged.\n\nDetails: {exc}",
+            )
+            return
+        if analysis.columns_need_checking:
+            dialog = CheckColumnsDialog(
+                data,
+                self.rules,
+                analysis,
+                categories=self._category_names(),
+                minimum_amount=float(self.min_amount.value()),
+                parent=self,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return
+            self.store.remember_import_overrides(analysis.columns, dialog.overrides)
+            analysis, overrides = dialog.analysis, dialog.overrides
+        try:
+            copy = self.store.save_import(source)
+            self.store.remember_last_import(copy)
+        except OSError as exc:
             QMessageBox.critical(self, "CSV storage error", f"Could not save a local copy of the CSV:\n{exc}")
             return
-        self.reload_csv()
+        self._show_month(data, analysis, overrides, copy, source)
+        self.show_page(0)
+
+    def reopen_last_import(self) -> None:
+        """On launch, reopen the last Imported month (silently skipped if it can't be)."""
+        copy = self.store.last_import()
+        if copy is None:
+            return
+        try:
+            data = copy.read_bytes()
+            analysis, overrides = self._analyze_import(data)
+        except (OSError, UnreadableCsvError):
+            return
+        if not analysis.columns_need_checking:
+            self._show_month(data, analysis, overrides, copy, None)
+
+    def _show_month(
+        self,
+        data: bytes,
+        analysis: MonthAnalysis,
+        overrides: ImportOverrides,
+        copy: Path,
+        source: Path | None,
+    ) -> None:
+        """Make this the current month (replacing any previous one) and draw it."""
+        self.csv_bytes = data
+        self.analysis = analysis
+        self.import_overrides = overrides
+        self.current_csv = copy
+        self.source_csv = source
+        self.sep_box.setCurrentText("Auto")
+        self.decimal_box.setCurrentText("Auto")
+        self.skip_auto.setChecked(True)
+        self.file_label.setText(str(source or copy))
+        self.uploaded_file_label.setText(str(copy))
+        self.populate_columns()
+        self.populate_preview()
+        self._set_ready_state(True)
+        self.render_analysis()
 
     def open_data_folder(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)
@@ -812,81 +882,99 @@ class FinSightWindow(QMainWindow):
         self.preview_table.resizeColumnsToContents()
 
     def refresh_uncategorized(self) -> None:
+        """Fill Review: one row per Uncategorized Merchant, largest total first."""
         if self.analysis is None:
+            self._update_review_badge()
             return
         search = self.search_box.text().strip().lower()
         merchants = [
             m
             for m in self.analysis.review_merchants
-            if not search or search in f"{m.merchant} {m.example} {m.suggested_category}".lower()
+            if not search or search in f"{m.merchant} {m.example}".lower()
         ]
         self.uncat_table.setRowCount(len(merchants))
         for row, merchant in enumerate(merchants):
-            rows_item = QTableWidgetItem(str(merchant.count))
-            rows_item.setData(Qt.UserRole, {"merchant": merchant.merchant, "suggestion": merchant.suggested_category})
-            self.uncat_table.setItem(row, 0, rows_item)
-            self.uncat_table.setItem(row, 1, QTableWidgetItem(merchant.merchant))
-            self.uncat_table.setItem(row, 2, QTableWidgetItem(merchant.suggested_category))
-            self.uncat_table.setItem(row, 3, QTableWidgetItem(merchant.example))
-            self.uncat_table.setItem(row, 4, QTableWidgetItem(f"{merchant.total:,.2f}"))
+            self.uncat_table.setItem(row, 0, QTableWidgetItem(merchant.merchant))
+            count_item = QTableWidgetItem(str(merchant.count))
+            count_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.uncat_table.setItem(row, 1, count_item)
+            total_item = QTableWidgetItem(f"{merchant.total:,.2f}")
+            total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.uncat_table.setItem(row, 2, total_item)
+            combo = self._review_category_combo(merchant)
+            self.uncat_table.setCellWidget(row, 3, combo)
+            apply_button = QPushButton("Apply")
+            apply_button.setObjectName("Secondary")
+            apply_button.setToolTip("File this Merchant under the chosen Category")
+            apply_button.clicked.connect(
+                lambda checked=False, m=merchant.merchant, c=combo: self._apply_review_choice(m, c)
+            )
+            self.uncat_table.setCellWidget(row, 4, apply_button)
+            self.uncat_table.setItem(row, 5, QTableWidgetItem(merchant.example))
         self.uncat_table.resizeColumnsToContents()
-        self.uncat_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.uncat_table.horizontalHeader().setSectionResizeMode(REVIEW_COLUMNS.index("Example"), QHeaderView.Stretch)
+        self._update_review_badge()
 
-    def use_selected_uncategorized(self) -> None:
-        selected = self.uncat_table.selectedItems()
-        if not selected:
-            return
-        rows_item = self.uncat_table.item(selected[0].row(), 0)
-        payload = rows_item.data(Qt.UserRole) if rows_item else None
-        if not isinstance(payload, dict):
-            return
-        merchant = str(payload.get("merchant", "")).strip()
-        suggestion = str(payload.get("suggestion", "")).strip()
-        if merchant:
-            self.new_pattern.setText(rule_for_merchant(merchant, suggestion)["pattern"])
-            self.new_merchant.setText(merchant)
-        if suggestion:
-            self._select_category(suggestion)
+    def _review_category_combo(self, merchant: ReviewMerchant) -> QComboBox:
+        combo = QComboBox()
+        if not merchant.suggested_category:
+            combo.addItem(CHOOSE_CATEGORY)
+        combo.addItems(self._category_names())
+        combo.addItem(NEW_CATEGORY)
+        if merchant.suggested_category:
+            index = combo.findText(merchant.suggested_category)
+            combo.setCurrentIndex(max(index, 0))
+        combo.activated.connect(lambda _index, m=merchant.merchant, c=combo: self._apply_review_choice(m, c))
+        return combo
 
-    def add_rule_from_fields(self) -> None:
-        pattern = self.new_pattern.text().strip()
-        category = self.new_category.currentText().strip()
-        merchant = self.new_merchant.text().strip()
-        if not pattern or not category:
-            QMessageBox.warning(self, "Missing rule", "Enter both a pattern and a category.")
+    def _apply_review_choice(self, merchant: str, combo: QComboBox) -> None:
+        choice = combo.currentText()
+        if choice == CHOOSE_CATEGORY:
             return
+        if choice == NEW_CATEGORY:
+            name, ok = QInputDialog.getText(self, "New Category", f"File “{merchant}” under a new Category:")
+            choice = name.strip()
+            if not ok or not choice or choice == UNCATEGORIZED:
+                combo.setCurrentIndex(0)
+                return
+        self.categorize_merchant(merchant, choice)
+
+    def categorize_merchant(self, merchant: str, category: str) -> None:
+        """Save a literal Rule for the Merchant, then re-analyze so it leaves Review."""
         try:
-            re.compile(pattern, flags=re.IGNORECASE)
-        except re.error as exc:
-            QMessageBox.warning(self, "Invalid regex", str(exc))
+            self.rules = self.store.categorize_merchant(merchant, category)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save Rule", f"Could not save the Rule:\n{exc}")
             return
-        rule = {"pattern": pattern, "category": category}
-        if merchant:
-            rule["merchant"] = merchant
-        self.rules.append(rule)
-        self.store.save_rules(self.rules)
+        self.categories = self._merged_categories()
         self.populate_rules_table()
-        self.new_pattern.clear()
-        self.new_merchant.clear()
+        self.populate_categories_table()
         self.refresh_plot()
 
-    def populate_category_combo(self) -> None:
-        if not hasattr(self, "new_category"):
-            return
-        current = self.new_category.currentText().strip() if self.new_category.count() else ""
-        self.new_category.blockSignals(True)
-        self.new_category.clear()
-        self.new_category.addItems(self._category_names())
-        self.new_category.blockSignals(False)
-        if current:
-            self._select_category(current)
+    def _merged_categories(self) -> list[str]:
+        rule_categories = [rule.get("category", "").strip() for rule in self.rules]
+        return sorted(
+            dict.fromkeys(c for c in [*self.store.load_categories(), *rule_categories] if c and c != OTHER)
+        )
 
-    def _select_category(self, category: str) -> None:
-        if not category or not hasattr(self, "new_category"):
-            return
-        index = self.new_category.findText(category)
-        if index >= 0:
-            self.new_category.setCurrentIndex(index)
+    def _update_review_badge(self) -> None:
+        remaining = len(self.analysis.review_merchants) if self.analysis is not None else 0
+        if hasattr(self, "nav_buttons"):
+            review_button = self.nav_buttons[self.tabs.indexOf(self.categorize_tab)]
+            review_button.setText(f"Review ({remaining})" if remaining else "Review")
+        if hasattr(self, "review_status"):
+            if self.analysis is None:
+                self.review_status.setText("Import a month to review its Uncategorized Merchants.")
+            elif remaining:
+                noun = "Merchant" if remaining == 1 else "Merchants"
+                self.review_status.setText(f"{remaining} Uncategorized {noun} left to review.")
+            else:
+                self.review_status.setText("All Merchants are categorized.")
+
+    def populate_category_combo(self) -> None:
+        """Categories changed: rebuild the Review dropdowns."""
+        if hasattr(self, "uncat_table"):
+            self.refresh_uncategorized()
 
     def populate_categories_table(self) -> None:
         if not hasattr(self, "categories_table"):
@@ -1015,6 +1103,7 @@ def main(argv: list[str] | None = None) -> int:
         app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)
     window = FinSightWindow(open_user_store())
+    window.reopen_last_import()
     window.show()
     return app.exec()
 

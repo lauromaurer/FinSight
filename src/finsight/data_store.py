@@ -6,12 +6,14 @@ import hashlib
 import json
 import os
 import tempfile
+from dataclasses import asdict, fields
 from datetime import datetime
 from pathlib import Path
 import sys
 from typing import Any, Iterable, Mapping
 
 from finsight.finsight_core import DEFAULT_RULES, load_default_categories
+from finsight.month_analysis import OTHER, ImportOverrides, rule_for_merchant
 
 
 APP_FOLDER_NAME = "FinSight"
@@ -143,6 +145,21 @@ class DataStore:
         cleaned = sorted(dict.fromkeys(str(item).strip() for item in categories if str(item).strip()))
         self._write_json(self.categories_path, cleaned)
 
+    def categorize_merchant(self, merchant: str, category: str) -> list[dict[str, str]]:
+        """Review: file a Merchant under a Category by saving a literal Rule for it.
+
+        Replaces any earlier Rule for that same Merchant, saves a new Category
+        (Other is always available and never saved), and returns the saved Rules.
+        """
+        rule = rule_for_merchant(merchant.strip(), category.strip())
+        rules = [r for r in self.load_rules() if r["pattern"] != rule["pattern"]]
+        rules.append(rule)
+        self.save_rules(rules)
+        categories = self.load_categories()
+        if rule["category"] != OTHER and rule["category"] not in categories:
+            self.save_categories([*categories, rule["category"]])
+        return rules
+
     @property
     def imports_dir(self) -> Path:
         return self.root / "imports"
@@ -230,6 +247,35 @@ class DataStore:
             data = {}
         data[fingerprint] = overrides
         self._write_json(self._overrides_path, data)
+
+    def remember_import_overrides(self, columns: Iterable[object], overrides: ImportOverrides) -> None:
+        """Remember Check your columns choices for the bank format with this header row.
+
+        `columns` is the header as FinSight detects it without overrides, so the
+        next Import of the same format finds these choices again.
+        """
+        data = {key: value for key, value in asdict(overrides).items() if value is not None}
+        if "text_columns" in data:
+            data["text_columns"] = list(data["text_columns"])
+        self.save_import_overrides(header_fingerprint(columns), data)
+
+    def remembered_import_overrides(self, columns: Iterable[object]) -> ImportOverrides | None:
+        """The choices remembered for the bank format with this header row, or None."""
+        data = self.import_overrides(header_fingerprint(columns))
+        if data is None:
+            return None
+        known = {f.name for f in fields(ImportOverrides)}
+        values = {key: value for key, value in data.items() if key in known}
+        if not values:
+            return None
+        try:
+            if values.get("text_columns") is not None:
+                values["text_columns"] = tuple(str(c) for c in values["text_columns"])
+            if values.get("header_row") is not None:
+                values["header_row"] = int(values["header_row"])
+        except (TypeError, ValueError):
+            return None
+        return ImportOverrides(**values)
 
     @staticmethod
     def _unique_path(folder: Path, stem: str, suffix: str) -> Path:
