@@ -89,6 +89,31 @@ class ReviewMerchant:
 
 
 @dataclass(frozen=True)
+class FlowNode:
+    """A Money flow node. `side` is "income", "month" or "expenses"."""
+
+    id: str
+    label: str
+    side: str
+    amount: float
+
+
+@dataclass(frozen=True)
+class FlowLink:
+    source: str
+    target: str
+    amount: float
+
+
+@dataclass(frozen=True)
+class MoneyFlow:
+    """Income Categories flow into the month, which flows out into Expense Categories and Saved."""
+
+    nodes: tuple[FlowNode, ...]
+    links: tuple[FlowLink, ...]
+
+
+@dataclass(frozen=True)
 class MonthAnalysis:
     settings: ImportSettings
     column_check: ColumnCheck | None
@@ -99,6 +124,8 @@ class MonthAnalysis:
     review_merchants: tuple[ReviewMerchant, ...]
     start_date: date | None
     end_date: date | None
+    month_label: str
+    money_flow: MoneyFlow
     columns: tuple[str, ...]
     # The raw imported table, for the Advanced view. Not part of equality.
     table: pd.DataFrame = field(compare=False, repr=False)
@@ -286,6 +313,47 @@ def _category_totals(transactions: list[Transaction]) -> tuple[CategoryTotal, ..
     return tuple(CategoryTotal(name, income, expenses) for name, (income, expenses) in ordered)
 
 
+_MONTH_NAMES = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+
+def _month_label(start: date | None, end: date | None) -> str:
+    if start is None or end is None:
+        return "This month"
+    if (start.year, start.month) == (end.year, end.month):
+        return f"{_MONTH_NAMES[start.month - 1]} {start.year}"
+    return f"{start:%d.%m.%Y} – {end:%d.%m.%Y}"
+
+
+def _money_flow(categories: tuple[CategoryTotal, ...], month_label: str) -> MoneyFlow:
+    income = sum(c.income for c in categories)
+    expenses = sum(c.expenses for c in categories)
+    saved = income - expenses
+    month = FlowNode("month", month_label, "month", max(income, expenses))
+    nodes: list[FlowNode] = [month]
+    links: list[FlowLink] = []
+
+    for c in sorted((c for c in categories if c.income > 0), key=lambda c: -c.income):
+        node = FlowNode(f"income:{c.category}", c.category, "income", c.income)
+        nodes.append(node)
+        links.append(FlowLink(node.id, month.id, c.income))
+    if saved < 0:
+        node = FlowNode("overspent", "Overspent", "income", -saved)
+        nodes.append(node)
+        links.append(FlowLink(node.id, month.id, -saved))
+    for c in sorted((c for c in categories if c.expenses > 0), key=lambda c: -c.expenses):
+        node = FlowNode(f"expenses:{c.category}", c.category, "expenses", c.expenses)
+        nodes.append(node)
+        links.append(FlowLink(month.id, node.id, c.expenses))
+    if saved > 0:
+        node = FlowNode("saved", "Saved", "expenses", saved)
+        nodes.append(node)
+        links.append(FlowLink(month.id, node.id, saved))
+    return MoneyFlow(tuple(nodes), tuple(links))
+
+
 # --- The entry point -------------------------------------------------------
 
 
@@ -326,7 +394,10 @@ def analyze_month(
     if (income_column is None and expenses_column is None) or not text_columns:
         preview = table.head(PREVIEW_ROW_COUNT).fillna("").astype(str)
         check = ColumnCheck(columns, tuple(preview.to_dict(orient="records")))
-        return MonthAnalysis(settings, check, 0.0, 0.0, (), (), (), None, None, columns, table)
+        label = _month_label(None, None)
+        return MonthAnalysis(
+            settings, check, 0.0, 0.0, (), (), (), None, None, label, _money_flow((), label), columns, table
+        )
 
     zero = pd.Series(0.0, index=table.index)
     incomes = _parse_amounts(table[income_column], decimal) if income_column else zero
@@ -351,16 +422,21 @@ def analyze_month(
         )
 
     known_dates = [t.date for t in transactions if t.date is not None]
+    start_date, end_date = min(known_dates, default=None), max(known_dates, default=None)
+    category_totals = _category_totals(transactions)
+    label = _month_label(start_date, end_date)
     return MonthAnalysis(
         settings=settings,
         column_check=None,
         income=sum(t.income for t in transactions),
         expenses=sum(t.expenses for t in transactions),
-        categories=_category_totals(transactions),
+        categories=category_totals,
         transactions=tuple(transactions),
         review_merchants=_review_merchants(transactions, set(categories or [])),
-        start_date=min(known_dates, default=None),
-        end_date=max(known_dates, default=None),
+        start_date=start_date,
+        end_date=end_date,
+        month_label=label,
+        money_flow=_money_flow(category_totals, label),
         columns=columns,
         table=table,
     )
