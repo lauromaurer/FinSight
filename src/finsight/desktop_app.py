@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import atexit
 import os
-import re
 import shutil
 import sys
 import tempfile
@@ -56,7 +55,7 @@ from finsight.finsight_core import (
     DEFAULT_CATEGORIES_PATH,
 )
 from finsight.check_columns import CheckColumnsDialog
-from finsight.data_store import DataStore, open_user_store, user_data_folder
+from finsight.data_store import DataStore, InvalidRuleError, open_user_store, user_data_folder
 from finsight.money_flow_chart import money_flow_figure
 from finsight.month_analysis import (
     OTHER,
@@ -219,7 +218,8 @@ QHeaderView::section {
 """
 
 
-SETTINGS_PAGE = 4
+PAGES = ["Import", "Review", "Dashboard", "Advanced"]
+RULE_COLUMNS = ["Merchant", "Category", "Matches (regular expression)"]
 REVIEW_COLUMNS = ["Merchant", "Transactions", "Total (CHF)", "Category", "", "Example"]
 CHOOSE_CATEGORY = "Choose a Category…"
 NEW_CATEGORY = "New Category…"
@@ -275,14 +275,10 @@ class FinSightWindow(QMainWindow):
             logo.setPixmap(load_logo_pixmap(56))
         layout.addWidget(logo, alignment=Qt.AlignHCenter)
 
-        self.open_button = QPushButton("Load CSV")
-        self.open_button.clicked.connect(self.open_csv)
-        layout.addWidget(self.open_button)
-
         self.nav_group = QButtonGroup(side)
         self.nav_group.setExclusive(True)
         self.nav_buttons = []
-        for index, label in enumerate(["Dashboard", "Categorize", "Rules", "Data", "Settings"]):
+        for index, label in enumerate(PAGES):
             button = QPushButton(label)
             button.setObjectName("NavButton")
             button.setCheckable(True)
@@ -302,29 +298,25 @@ class FinSightWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.tabBar().hide()
+        self.import_tab = QWidget()
+        self.review_tab = QWidget()
         self.dashboard_tab = QWidget()
-        self.categorize_tab = QWidget()
-        self.rules_tab = QWidget()
-        self.data_tab = QWidget()
-        self.settings_tab = QWidget()
-        self.tabs.addTab(self.dashboard_tab, "Dashboard")
-        self.tabs.addTab(self.categorize_tab, "Categorize")
-        self.tabs.addTab(self.rules_tab, "Rules")
-        self.tabs.addTab(self.data_tab, "Data")
-        self.tabs.addTab(self.settings_tab, "Settings")
+        self.advanced_tab = QWidget()
+        # Same order as PAGES, so a sidebar button's index is its page's index.
+        for page, name in zip((self.import_tab, self.review_tab, self.dashboard_tab, self.advanced_tab), PAGES):
+            self.tabs.addTab(page, name)
         layout.addWidget(self.tabs, stretch=1)
         self.tabs.currentChanged.connect(self.sync_sidebar_navigation)
 
+        self._build_import_tab()
         self._build_dashboard_tab()
-        self._build_categorize_tab()
-        self._build_rules_tab()
-        self._build_data_tab()
-        self._build_settings_tab()
+        self._build_review_tab()
+        self._build_advanced_tab()
         return main
 
-    def show_page(self, index: int) -> None:
+    def show_page(self, page: int | QWidget) -> None:
         if hasattr(self, "tabs"):
-            self.tabs.setCurrentIndex(index)
+            self.tabs.setCurrentIndex(page if isinstance(page, int) else self.tabs.indexOf(page))
 
     def sync_sidebar_navigation(self, index: int) -> None:
         if hasattr(self, "nav_buttons") and 0 <= index < len(self.nav_buttons):
@@ -401,16 +393,46 @@ class FinSightWindow(QMainWindow):
             return
         view.load(QUrl.fromLocalFile(str(preview_path.resolve())))
 
-    def _build_data_tab(self) -> None:
-        layout = QVBoxLayout(self.data_tab)
-        layout.setContentsMargins(8, 8, 8, 8)
-        self.preview_table = QTableWidget(0, 0)
-        self.preview_table.setAlternatingRowColors(True)
-        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        layout.addWidget(self.preview_table)
+    def _build_import_tab(self) -> None:
+        layout = QVBoxLayout(self.import_tab)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(14)
 
-    def _build_categorize_tab(self) -> None:
-        layout = QVBoxLayout(self.categorize_tab)
+        panel = QFrame()
+        panel.setObjectName("Panel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(20, 18, 20, 18)
+        panel_layout.setSpacing(12)
+        heading = QLabel("Import a month")
+        heading.setObjectName("MonthHeader")
+        panel_layout.addWidget(heading)
+        intro = QLabel(
+            "Export last month's transactions from your bank as a CSV file and Import it here. "
+            "FinSight finds the columns for you, then you Review new Merchants and look at the Dashboard."
+        )
+        intro.setWordWrap(True)
+        panel_layout.addWidget(intro)
+        self.open_button = QPushButton("Choose CSV file…")
+        self.open_button.clicked.connect(self.open_csv)
+        panel_layout.addWidget(self.open_button, alignment=Qt.AlignLeft)
+
+        current = QGridLayout()
+        current.setHorizontalSpacing(12)
+        self.file_label = QLabel("Nothing Imported yet")
+        self.file_label.setWordWrap(True)
+        self.uploaded_file_label = QLabel(f"Imported CSV files are kept in: {self.store.imports_dir}")
+        self.uploaded_file_label.setWordWrap(True)
+        current.addWidget(QLabel("Current month"), 0, 0)
+        current.addWidget(self.file_label, 0, 1)
+        current.addWidget(QLabel("Saved copy"), 1, 0)
+        current.addWidget(self.uploaded_file_label, 1, 1)
+        current.setColumnStretch(1, 1)
+        panel_layout.addLayout(current)
+        layout.addWidget(panel)
+        layout.addStretch(1)
+
+    def _build_review_tab(self) -> None:
+        layout = QVBoxLayout(self.review_tab)
         layout.setContentsMargins(8, 8, 8, 8)
         top = QHBoxLayout()
         self.review_status = QLabel("Import a month to review its Uncategorized Merchants.")
@@ -429,118 +451,111 @@ class FinSightWindow(QMainWindow):
         self.uncat_table.verticalHeader().setVisible(False)
         layout.addWidget(self.uncat_table, stretch=1)
 
+        bottom = QHBoxLayout()
         hint = QLabel(
             "Pick a Category for a Merchant to file it there from now on. "
             "Review is optional: anything left here shows as Uncategorized on the Dashboard."
         )
         hint.setWordWrap(True)
-        layout.addWidget(hint)
+        bottom.addWidget(hint, stretch=1)
+        to_dashboard = QPushButton("Go to Dashboard")
+        to_dashboard.setObjectName("Secondary")
+        to_dashboard.clicked.connect(lambda: self.show_page(self.dashboard_tab))
+        bottom.addWidget(to_dashboard)
+        layout.addLayout(bottom)
 
-    def _build_rules_tab(self) -> None:
-        layout = QVBoxLayout(self.rules_tab)
+    def _build_advanced_tab(self) -> None:
+        layout = QVBoxLayout(self.advanced_tab)
         layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(12)
+        self.advanced_sections = QTabWidget()
+        layout.addWidget(self.advanced_sections)
+        for title, build in (
+            ("Rules", self._build_rules_section),
+            ("Categories", self._build_categories_section),
+            ("Columns", self._build_columns_section),
+            ("Transactions", self._build_transactions_section),
+            ("Data folder", self._build_data_folder_section),
+        ):
+            section = QWidget()
+            build(section)
+            self.advanced_sections.addTab(section, title)
 
-        labels_panel = QFrame()
-        labels_panel.setObjectName("Panel")
-        labels_layout = QVBoxLayout(labels_panel)
-        labels_layout.setContentsMargins(14, 12, 14, 12)
-        labels_layout.addWidget(QLabel("Category labels"))
-        self.categories_table = QTableWidget(0, 1)
-        self.categories_table.setHorizontalHeaderLabels(["Label"])
-        self.categories_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        labels_layout.addWidget(self.categories_table, stretch=1)
-        label_buttons = QHBoxLayout()
-        add_category = QPushButton("New label")
-        add_category.setObjectName("Secondary")
-        add_category.clicked.connect(lambda: self.categories_table.insertRow(self.categories_table.rowCount()))
-        remove_category = QPushButton("Remove selected")
-        remove_category.setObjectName("Secondary")
-        remove_category.clicked.connect(self.remove_selected_categories)
-        save_categories_button = QPushButton("Save labels")
-        save_categories_button.clicked.connect(self.save_categories_from_table)
-        label_buttons.addStretch(1)
-        label_buttons.addWidget(add_category)
-        label_buttons.addWidget(remove_category)
-        label_buttons.addWidget(save_categories_button)
-        labels_layout.addLayout(label_buttons)
-        layout.addWidget(labels_panel, stretch=1)
-
-        rules_panel = QFrame()
-        rules_panel.setObjectName("Panel")
-        rules_layout = QVBoxLayout(rules_panel)
-        rules_layout.setContentsMargins(14, 12, 14, 12)
-        rules_layout.addWidget(QLabel("Learned regex rules"))
-        self.rules_table = QTableWidget(0, 3)
-        self.rules_table.setHorizontalHeaderLabels(["Regex", "Label", "Merchant alias"])
+    def _build_rules_section(self, section: QWidget) -> None:
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(12, 12, 12, 12)
+        intro = QLabel(
+            "Each Rule files the transactions it matches under a Category. Review creates Rules for you; "
+            "here you can edit what a Rule matches as a regular expression, or delete it."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.rules_table = QTableWidget(0, len(RULE_COLUMNS))
+        self.rules_table.setHorizontalHeaderLabels(RULE_COLUMNS)
         self.rules_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        rules_layout.addWidget(self.rules_table, stretch=1)
+        self.rules_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        layout.addWidget(self.rules_table, stretch=1)
 
         buttons = QHBoxLayout()
-        add_rule = QPushButton("New row")
+        add_rule = QPushButton("New Rule")
         add_rule.setObjectName("Secondary")
         add_rule.clicked.connect(lambda: self.rules_table.insertRow(self.rules_table.rowCount()))
-        remove_rule = QPushButton("Remove selected")
+        remove_rule = QPushButton("Delete selected")
         remove_rule.setObjectName("Secondary")
         remove_rule.clicked.connect(self.remove_selected_rules)
-        save_rule_button = QPushButton("Save rules")
+        save_rule_button = QPushButton("Save Rules")
         save_rule_button.clicked.connect(self.save_rules_from_table)
         buttons.addStretch(1)
         buttons.addWidget(add_rule)
         buttons.addWidget(remove_rule)
         buttons.addWidget(save_rule_button)
-        rules_layout.addLayout(buttons)
-        layout.addWidget(rules_panel, stretch=2)
-
-        self.populate_categories_table()
+        layout.addLayout(buttons)
         self.populate_rules_table()
 
-    def _build_settings_tab(self) -> None:
-        layout = QVBoxLayout(self.settings_tab)
-        layout.setContentsMargins(18, 18, 18, 18)
-        layout.setSpacing(14)
+    def _build_categories_section(self, section: QWidget) -> None:
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(12, 12, 12, 12)
+        intro = QLabel("Other is always available. Renaming a Category moves its Rules along with it.")
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.categories_table = QTableWidget(0, 1)
+        self.categories_table.setHorizontalHeaderLabels(["Category"])
+        self.categories_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.categories_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.categories_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.categories_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        layout.addWidget(self.categories_table, stretch=1)
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        for text, handler in (
+            ("Add Category…", self.add_category),
+            ("Rename…", self.rename_selected_category),
+            ("Remove", self.remove_selected_category),
+        ):
+            button = QPushButton(text)
+            button.setObjectName("Secondary")
+            button.clicked.connect(handler)
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        self.populate_categories_table()
 
-        info = QFrame()
-        info.setObjectName("Panel")
-        info_layout = QGridLayout(info)
-        info_layout.setContentsMargins(16, 14, 16, 14)
-        info_layout.setHorizontalSpacing(12)
-        info_layout.setVerticalSpacing(10)
+    def _build_columns_section(self, section: QWidget) -> None:
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(12, 12, 12, 12)
+        intro = QLabel(
+            "FinSight detects these when you Import. Override them here if detection got something wrong; "
+            "your choices are remembered for files from the same bank."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
 
-        self.file_label = QLabel("No CSV loaded")
-        self.file_label.setWordWrap(True)
-        self.uploaded_file_label = QLabel(f"Imported CSVs are kept in: {self.store.imports_dir}")
-        self.uploaded_file_label.setWordWrap(True)
-        self.status_label = QLabel(f"Rules are saved in: {self.store.rules_path}")
-        self.status_label.setWordWrap(True)
-        self.data_folder_label = QLabel(str(self.store.root))
-        self.data_folder_label.setWordWrap(True)
-        self.data_folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        open_data_folder = QPushButton("Open data folder")
-        open_data_folder.clicked.connect(self.open_data_folder)
-        info_layout.addWidget(QLabel("Data folder"), 3, 0)
-        info_layout.addWidget(self.data_folder_label, 3, 1)
-        info_layout.addWidget(open_data_folder, 3, 2)
-        info_layout.addWidget(QLabel("Current CSV"), 0, 0)
-        info_layout.addWidget(self.file_label, 0, 1)
-        info_layout.addWidget(QLabel("Saved copy"), 1, 0)
-        info_layout.addWidget(self.uploaded_file_label, 1, 1)
-        info_layout.addWidget(QLabel("Rules"), 2, 0)
-        info_layout.addWidget(self.status_label, 2, 1)
-        layout.addWidget(info)
-
-        settings = QFrame()
-        settings.setObjectName("Panel")
-        settings_layout = QGridLayout(settings)
-        settings_layout.setContentsMargins(16, 14, 16, 14)
-        settings_layout.setHorizontalSpacing(12)
-        settings_layout.setVerticalSpacing(10)
-
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
         self.sep_box = QComboBox()
         self.sep_box.addItems(["Auto", ";", ",", "\\t", "|"])
         self.decimal_box = QComboBox()
         self.decimal_box.addItems(["Auto", ".", ","])
-        self.skip_auto = QCheckBox("Auto-detect header row")
+        self.skip_auto = QCheckBox("Detect header row")
         self.skip_auto.setChecked(True)
         self.skip_rows = QSpinBox()
         self.skip_rows.setRange(0, 80)
@@ -553,39 +568,77 @@ class FinSightWindow(QMainWindow):
         self.min_amount = QSpinBox()
         self.min_amount.setRange(0, 100_000)
         self.min_amount.setSingleStep(10)
+        self.min_amount.setSuffix(" CHF")
+        self.min_amount.setToolTip("Leave out transactions smaller than this amount")
 
         self.text_table = QTableWidget(0, 2)
         self.text_table.setHorizontalHeaderLabels(["Use", "Text column"])
         self.text_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.text_table.verticalHeader().setVisible(False)
-        self.text_table.setFixedHeight(260)
+        self.text_table.setFixedHeight(220)
 
-        self.refresh_button = QPushButton("Apply settings")
-        self.refresh_button.clicked.connect(self.refresh_plot)
-        self.reload_button = QPushButton("Reload CSV")
+        self.refresh_button = QPushButton("Apply")
+        self.refresh_button.clicked.connect(self.apply_import_overrides)
+        self.reload_button = QPushButton("Reset")
+        self.reload_button.setToolTip("Back to the columns this month was Imported with")
         self.reload_button.setObjectName("Secondary")
         self.reload_button.clicked.connect(self.reload_csv)
 
-        settings_layout.addWidget(QLabel("Delimiter"), 0, 0)
-        settings_layout.addWidget(QLabel("Decimal"), 0, 1)
-        settings_layout.addWidget(QLabel("Header row"), 0, 2)
-        settings_layout.addWidget(self.sep_box, 1, 0)
-        settings_layout.addWidget(self.decimal_box, 1, 1)
-        settings_layout.addWidget(self.skip_auto, 1, 2)
-        settings_layout.addWidget(QLabel("Manual rows to skip"), 2, 2)
-        settings_layout.addWidget(self.skip_rows, 3, 2)
+        grid.addWidget(QLabel("Delimiter"), 0, 0)
+        grid.addWidget(QLabel("Decimal mark"), 0, 1)
+        grid.addWidget(QLabel("Header row"), 0, 2)
+        grid.addWidget(self.sep_box, 1, 0)
+        grid.addWidget(self.decimal_box, 1, 1)
+        grid.addWidget(self.skip_auto, 1, 2)
+        grid.addWidget(QLabel("Rows before the header"), 2, 2)
+        grid.addWidget(self.skip_rows, 3, 2)
+        grid.addWidget(QLabel("Income column"), 4, 0)
+        grid.addWidget(QLabel("Expenses column"), 4, 1)
+        grid.addWidget(QLabel("Minimum amount"), 4, 2)
+        grid.addWidget(self.inflow_box, 5, 0)
+        grid.addWidget(self.outflow_box, 5, 1)
+        grid.addWidget(self.min_amount, 5, 2)
+        grid.addWidget(QLabel("Text columns (Rules match against these)"), 6, 0, 1, 3)
+        grid.addWidget(self.text_table, 7, 0, 1, 3)
+        grid.addWidget(self.reload_button, 8, 1)
+        grid.addWidget(self.refresh_button, 8, 2)
+        layout.addLayout(grid)
+        layout.addStretch(1)
 
-        settings_layout.addWidget(QLabel("Income column"), 4, 0)
-        settings_layout.addWidget(QLabel("Expenses column"), 4, 1)
-        settings_layout.addWidget(QLabel("Minimum amount"), 4, 2)
-        settings_layout.addWidget(self.inflow_box, 5, 0)
-        settings_layout.addWidget(self.outflow_box, 5, 1)
-        settings_layout.addWidget(self.min_amount, 5, 2)
-        settings_layout.addWidget(QLabel("Category text columns"), 6, 0, 1, 3)
-        settings_layout.addWidget(self.text_table, 7, 0, 1, 3)
-        settings_layout.addWidget(self.reload_button, 8, 1)
-        settings_layout.addWidget(self.refresh_button, 8, 2)
-        layout.addWidget(settings)
+    def _build_transactions_section(self, section: QWidget) -> None:
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(QLabel("The Imported CSV as FinSight read it (first 200 rows)."))
+        self.preview_table = QTableWidget(0, 0)
+        self.preview_table.setAlternatingRowColors(True)
+        self.preview_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        layout.addWidget(self.preview_table, stretch=1)
+
+    def _build_data_folder_section(self, section: QWidget) -> None:
+        layout = QVBoxLayout(section)
+        layout.setContentsMargins(12, 12, 12, 12)
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(10)
+        self.data_folder_label = QLabel(str(self.store.root))
+        self.data_folder_label.setWordWrap(True)
+        self.data_folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        open_data_folder = QPushButton("Open data folder")
+        open_data_folder.clicked.connect(self.open_data_folder)
+        grid.addWidget(QLabel("Data folder"), 0, 0)
+        grid.addWidget(self.data_folder_label, 0, 1)
+        grid.addWidget(open_data_folder, 0, 2)
+        grid.addWidget(QLabel("Rules"), 1, 0)
+        grid.addWidget(QLabel(str(self.store.rules_path)), 1, 1)
+        grid.addWidget(QLabel("Imported CSV files"), 2, 0)
+        grid.addWidget(QLabel(str(self.store.imports_dir)), 2, 1)
+        grid.addWidget(QLabel("Exported Money flows"), 3, 0)
+        grid.addWidget(QLabel(str(self.store.money_flow_dir)), 3, 1)
+        grid.setColumnStretch(1, 1)
+        layout.addLayout(grid)
+        hint = QLabel("Back up this folder to keep your Rules, Categories and Imports.")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
         layout.addStretch(1)
 
     def _set_ready_state(self, ready: bool) -> None:
@@ -595,13 +648,13 @@ class FinSightWindow(QMainWindow):
             self.text_table,
             self.min_amount,
             self.refresh_button,
+            self.reload_button,
             self.export_money_flow_button,
-            self.tabs,
         ):
             widget.setEnabled(ready)
 
     def _overrides(self, include_columns: bool) -> ImportOverrides:
-        """Import overrides from the Settings page. Columns only once the user has seen them."""
+        """Import overrides from Advanced > Columns. Columns only once the user has seen them."""
         base = self.import_overrides
         sep = self.sep_box.currentText()
         sep = base.sep if sep == "Auto" else ("\t" if sep == "\\t" else sep)
@@ -619,20 +672,64 @@ class FinSightWindow(QMainWindow):
             date_column=self.analysis.settings.date_column if self.analysis else None,
         )
 
-    def _analyze(self, include_columns: bool) -> bool:
+    def _analyze(self, include_columns: bool) -> ImportOverrides | None:
+        """Re-analyze the current month with the current Rules and overrides.
+
+        If the columns then need checking, the Check your columns dialog opens
+        (its choices are remembered for this bank format); cancelling it keeps
+        the month as it was. Returns the overrides used, or None if unchanged.
+        """
         assert self.csv_bytes is not None
+        overrides = self._overrides(include_columns)
         try:
-            self.analysis = analyze_month(
+            analysis = analyze_month(
                 self.csv_bytes,
                 self.rules,
-                self._overrides(include_columns),
+                overrides,
                 categories=self._category_names(),
                 minimum_amount=float(self.min_amount.value()),
             )
         except UnreadableCsvError as exc:
-            QMessageBox.critical(self, "CSV error", f"Could not read the CSV:\n{exc}")
-            return False
-        return True
+            QMessageBox.critical(self, "Can't read this file", f"FinSight couldn't read the CSV:\n{exc}")
+            return None
+        if analysis.columns_need_checking:
+            dialog = CheckColumnsDialog(
+                self.csv_bytes,
+                self.rules,
+                analysis,
+                categories=self._category_names(),
+                minimum_amount=float(self.min_amount.value()),
+                parent=self,
+            )
+            if dialog.exec() != QDialog.Accepted:
+                return None
+            analysis, overrides = dialog.analysis, dialog.overrides
+            self._remember_overrides(overrides)
+            self.import_overrides = overrides
+        self.analysis = analysis
+        return overrides
+
+    def _remember_overrides(self, overrides: ImportOverrides) -> None:
+        """Remember import overrides for this bank format (keyed by the header as detected)."""
+        assert self.csv_bytes is not None
+        try:
+            detected = analyze_month(self.csv_bytes, self.rules).columns
+            self.store.remember_import_overrides(detected, overrides)
+        except (OSError, UnreadableCsvError) as exc:
+            QMessageBox.warning(self, "Not remembered", f"FinSight couldn't remember these columns:\n{exc}")
+
+    def apply_import_overrides(self) -> None:
+        """Advanced > Columns > Apply: use the chosen columns now and for this bank format from now on."""
+        if self.csv_bytes is None:
+            return
+        overrides = self._analyze(include_columns=True)
+        if overrides is None:
+            return
+        self.import_overrides = overrides
+        self._remember_overrides(overrides)
+        self.populate_columns()
+        self.populate_preview()
+        self.render_analysis()
 
     def _analyze_import(self, data: bytes) -> tuple[MonthAnalysis, ImportOverrides]:
         """Analyze an Imported CSV, applying the choices remembered for its bank format.
@@ -687,7 +784,8 @@ class FinSightWindow(QMainWindow):
             QMessageBox.critical(self, "CSV storage error", f"Could not save a local copy of the CSV:\n{exc}")
             return
         self._show_month(data, analysis, overrides, copy, source)
-        self.show_page(0)
+        # Import -> Review -> Dashboard: Review only when there is something to review.
+        self.show_page(self.review_tab if analysis.review_merchants else self.dashboard_tab)
 
     def reopen_last_import(self) -> None:
         """On launch, reopen the last Imported month (silently skipped if it can't be)."""
@@ -701,6 +799,7 @@ class FinSightWindow(QMainWindow):
             return
         if not analysis.columns_need_checking:
             self._show_month(data, analysis, overrides, copy, None)
+            self.show_page(self.dashboard_tab)
 
     def _show_month(
         self,
@@ -731,14 +830,18 @@ class FinSightWindow(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.root)))
 
     def reload_csv(self) -> None:
+        """Advanced > Columns > Reset: back to the columns this month was Imported with."""
         if self.current_csv is None:
             return
         try:
             self.csv_bytes = self.current_csv.read_bytes()
         except OSError as exc:
-            QMessageBox.critical(self, "CSV error", f"Could not read the CSV:\n{exc}")
+            QMessageBox.critical(self, "Can't read this file", f"FinSight couldn't read the CSV:\n{exc}")
             return
-        if not self._analyze(include_columns=False):
+        self.sep_box.setCurrentText("Auto")
+        self.decimal_box.setCurrentText("Auto")
+        self.skip_auto.setChecked(True)
+        if self._analyze(include_columns=False) is None:
             return
         self.file_label.setText(str(self.source_csv or self.current_csv))
         self.uploaded_file_label.setText(str(self.current_csv))
@@ -778,25 +881,17 @@ class FinSightWindow(QMainWindow):
         return columns
 
     def refresh_plot(self) -> None:
-        """Re-analyze with the current Rules and Settings, then redraw every page."""
+        """Re-analyze with the current Rules and Columns, then redraw every page."""
         if self.csv_bytes is None:
             return
-        if self._analyze(include_columns=True):
+        if self._analyze(include_columns=True) is not None:
             self.render_analysis()
 
     def render_analysis(self) -> None:
         analysis = self.analysis
         if analysis is None:
             return
-        if analysis.columns_need_checking:
-            self.current_fig = None
-            QMessageBox.warning(
-                self,
-                "Check your columns",
-                "FinSight could not find the Income, Expenses and text columns in this file.\n"
-                "Choose them in Settings, then press Apply settings.",
-            )
-            self.show_page(SETTINGS_PAGE)
+        if analysis.columns_need_checking:  # _analyze resolves this via Check your columns
             return
 
         self.current_fig = money_flow_figure(analysis)
@@ -960,7 +1055,7 @@ class FinSightWindow(QMainWindow):
     def _update_review_badge(self) -> None:
         remaining = len(self.analysis.review_merchants) if self.analysis is not None else 0
         if hasattr(self, "nav_buttons"):
-            review_button = self.nav_buttons[self.tabs.indexOf(self.categorize_tab)]
+            review_button = self.nav_buttons[self.tabs.indexOf(self.review_tab)]
             review_button.setText(f"Review ({remaining})" if remaining else "Review")
         if hasattr(self, "review_status"):
             if self.analysis is None:
@@ -983,34 +1078,88 @@ class FinSightWindow(QMainWindow):
         for row, category in enumerate(self.categories):
             self.categories_table.setItem(row, 0, QTableWidgetItem(category))
 
-    def remove_selected_categories(self) -> None:
-        rows = sorted({item.row() for item in self.categories_table.selectedItems()}, reverse=True)
-        for row in rows:
-            self.categories_table.removeRow(row)
+    def _selected_category(self) -> str | None:
+        rows = {item.row() for item in self.categories_table.selectedItems()}
+        if not rows:
+            QMessageBox.information(self, "Choose a Category", "Select a Category in the list first.")
+            return None
+        item = self.categories_table.item(min(rows), 0)
+        return item.text() if item else None
 
-    def save_categories_from_table(self) -> None:
-        categories: list[str] = []
-        for row in range(self.categories_table.rowCount()):
-            item = self.categories_table.item(row, 0)
-            label = item.text().strip() if item else ""
-            if label and label != "Other":
-                categories.append(label)
-        if not categories:
-            QMessageBox.warning(self, "Missing labels", "Create at least one category label.")
-            return
-        self.categories = sorted(dict.fromkeys(categories))
-        self.store.save_categories(self.categories)
+    def _ask_category_name(self, title: str, prompt: str, text: str = "") -> str | None:
+        name, ok = QInputDialog.getText(self, title, prompt, text=text)
+        name = name.strip()
+        if not ok or not name:
+            return None
+        if name == UNCATEGORIZED:
+            QMessageBox.warning(
+                self, title, "Uncategorized means “no Rule matched yet”, so it can't be a Category. Try Other."
+            )
+            return None
+        return name
+
+    def _categories_changed(self, rules: list[dict[str, str]] | None = None) -> None:
+        if rules is not None:
+            self.rules = rules
+        self.categories = self._merged_categories()
         self.populate_categories_table()
+        self.populate_rules_table()
         self.populate_category_combo()
         self.refresh_plot()
-        QMessageBox.information(self, "Labels saved", f"Category labels were saved to {self.store.categories_path}.")
+
+    def add_category(self) -> None:
+        name = self._ask_category_name("Add Category", "Name of the new Category:")
+        if name is None or name == OTHER or name in self.categories:
+            return
+        try:
+            self.store.save_categories([*self.categories, name])
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save", f"Could not save the Categories:\n{exc}")
+            return
+        self._categories_changed()
+
+    def rename_selected_category(self) -> None:
+        old = self._selected_category()
+        if old is None:
+            return
+        new = self._ask_category_name("Rename Category", f"New name for “{old}”:", text=old)
+        if new is None or new == old:
+            return
+        try:
+            self.store.save_categories(self.categories)  # include Categories only known from Rules
+            rules = self.store.rename_category(old, new)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save", f"Could not rename the Category:\n{exc}")
+            return
+        self._categories_changed(rules)
+
+    def remove_selected_category(self) -> None:
+        name = self._selected_category()
+        if name is None:
+            return
+        used_by = sum(1 for rule in self.rules if rule.get("category") == name)
+        message = f"Remove the Category “{name}”?"
+        if used_by:
+            rules = "Rule" if used_by == 1 else "Rules"
+            message += f"\n\nIts {used_by} {rules} will be deleted too, and their Merchants go back to Review."
+        if QMessageBox.question(self, "Remove Category", message) != QMessageBox.Yes:
+            return
+        try:
+            self.store.save_categories(self.categories)
+            rules = self.store.remove_category(name)
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save", f"Could not remove the Category:\n{exc}")
+            return
+        self._categories_changed(rules)
 
     def populate_rules_table(self) -> None:
+        if not hasattr(self, "rules_table"):
+            return
         self.rules_table.setRowCount(len(self.rules))
         for row, rule in enumerate(self.rules):
-            self.rules_table.setItem(row, 0, QTableWidgetItem(rule.get("pattern", "")))
-            self.rules_table.setItem(row, 1, QTableWidgetItem(rule.get("category", "")))
-            self.rules_table.setItem(row, 2, QTableWidgetItem(rule.get("merchant", "")))
+            self.rules_table.setItem(row, RULE_COLUMNS.index("Merchant"), QTableWidgetItem(rule.get("merchant", "")))
+            self.rules_table.setItem(row, RULE_COLUMNS.index("Category"), QTableWidgetItem(rule.get("category", "")))
+            self.rules_table.setItem(row, 2, QTableWidgetItem(rule.get("pattern", "")))
 
     def remove_selected_rules(self) -> None:
         rows = sorted({item.row() for item in self.rules_table.selectedItems()}, reverse=True)
@@ -1018,31 +1167,52 @@ class FinSightWindow(QMainWindow):
             self.rules_table.removeRow(row)
 
     def save_rules_from_table(self) -> None:
+        """Save the Rules table. A Rule with an invalid regular expression is not saved."""
+
+        def cell(row: int, column: int) -> str:
+            item = self.rules_table.item(row, column)
+            return item.text().strip() if item else ""
+
+        known = set(self._category_names())
         rules: list[dict[str, str]] = []
+        table_rows: list[int] = []
         for row in range(self.rules_table.rowCount()):
-            pattern_item = self.rules_table.item(row, 0)
-            category_item = self.rules_table.item(row, 1)
-            merchant_item = self.rules_table.item(row, 2)
-            pattern = pattern_item.text().strip() if pattern_item else ""
-            category = category_item.text().strip() if category_item else ""
-            merchant = merchant_item.text().strip() if merchant_item else ""
-            if pattern and category:
-                if category not in self.categories:
-                    QMessageBox.warning(self, "Unknown label", f"Row {row + 1}: choose one of the saved category labels.")
-                    return
-                try:
-                    re.compile(pattern, flags=re.IGNORECASE)
-                except re.error as exc:
-                    QMessageBox.warning(self, "Invalid regex", f"Row {row + 1}: {exc}")
-                    return
-                rule = {"pattern": pattern, "category": category}
-                if merchant:
-                    rule["merchant"] = merchant
-                rules.append(rule)
+            merchant, category, pattern = cell(row, 0), cell(row, 1), cell(row, 2)
+            if not pattern and not category:
+                continue
+            if not pattern or category not in known:
+                self.rules_table.selectRow(row)
+                QMessageBox.warning(
+                    self,
+                    "Rule not saved",
+                    f"Rule {row + 1} needs both what it matches and one of your Categories "
+                    "(add new Categories under Categories first). Nothing was saved.",
+                )
+                return
+            rule = {"pattern": pattern, "category": category}
+            if merchant:
+                rule["merchant"] = merchant
+            rules.append(rule)
+            table_rows.append(row)
+        try:
+            self.store.save_rules(rules)
+        except InvalidRuleError as exc:
+            row = table_rows[exc.row]
+            self.rules_table.selectRow(row)
+            QMessageBox.warning(
+                self,
+                "Rule not saved",
+                f"Rule {row + 1} isn't a valid regular expression: {exc.reason}.\nNothing was saved.",
+            )
+            return
+        except OSError as exc:
+            QMessageBox.critical(self, "Could not save", f"Could not save the Rules:\n{exc}")
+            return
         self.rules = rules
-        self.store.save_rules(self.rules)
+        self.categories = self._merged_categories()
+        self.populate_categories_table()
         self.refresh_plot()
-        QMessageBox.information(self, "Rules saved", f"Rules were saved to {self.store.rules_path}.")
+        QMessageBox.information(self, "Rules saved", f"Your Rules were saved to {self.store.rules_path}.")
 
     def export_money_flow(self) -> None:
         if self.current_fig is None:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import tempfile
 from dataclasses import asdict, fields
 from datetime import datetime
@@ -64,6 +65,16 @@ def header_fingerprint(columns: Iterable[object]) -> str:
     """
     normalized = "\x1f".join(str(column).strip().casefold() for column in columns)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
+
+
+class InvalidRuleError(ValueError):
+    """A Rule whose match text isn't a valid regular expression. `row` is its 0-based index."""
+
+    def __init__(self, row: int, pattern: str, reason: str) -> None:
+        super().__init__(f"Rule {row + 1} ({pattern!r}): {reason}")
+        self.row = row
+        self.pattern = pattern
+        self.reason = reason
 
 
 def _clean_rules(data: Any) -> list[dict[str, str]]:
@@ -132,6 +143,12 @@ class DataStore:
         return _clean_rules(_read_json(self.rules_path)) or [dict(rule) for rule in DEFAULT_RULES]
 
     def save_rules(self, rules: list[dict[str, str]]) -> None:
+        """Save Rules. Raises InvalidRuleError (saving nothing) if any pattern is invalid regex."""
+        for row, rule in enumerate(rules):
+            try:
+                re.compile(rule["pattern"], flags=re.IGNORECASE)
+            except re.error as exc:
+                raise InvalidRuleError(row, rule["pattern"], str(exc)) from None
         self._write_json(self.rules_path, rules)
 
     def load_categories(self) -> list[str]:
@@ -158,6 +175,27 @@ class DataStore:
         categories = self.load_categories()
         if rule["category"] != OTHER and rule["category"] not in categories:
             self.save_categories([*categories, rule["category"]])
+        return rules
+
+    def rename_category(self, old: str, new: str) -> list[dict[str, str]]:
+        """Rename a Category, moving every Rule that files into it. Returns the saved Rules.
+
+        Renaming onto an existing Category merges the two.
+        """
+        old, new = old.strip(), new.strip()
+        rules = [{**rule, "category": new} if rule["category"] == old else rule for rule in self.load_rules()]
+        self.save_rules(rules)
+        categories = [new if category == old else category for category in self.load_categories()]
+        self.save_categories([category for category in [*categories, new] if category != OTHER])
+        return rules
+
+    def remove_category(self, name: str) -> list[dict[str, str]]:
+        """Remove a Category and the Rules that file into it, so their Merchants
+        go back to Review. Returns the saved Rules."""
+        name = name.strip()
+        rules = [rule for rule in self.load_rules() if rule["category"] != name]
+        self.save_rules(rules)
+        self.save_categories([category for category in self.load_categories() if category != name])
         return rules
 
     @property

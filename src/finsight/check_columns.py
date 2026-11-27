@@ -161,7 +161,7 @@ class CheckColumnsDialog(QDialog):
                 minimum_amount=self._minimum_amount,
             )
         except UnreadableCsvError as exc:
-            self.status.setText(f"FinSight can't read the file with these settings: {exc}")
+            self.status.setText(f"FinSight can't read the file with these choices:{exc}")
             self.buttons.button(QDialogButtonBox.Ok).setEnabled(False)
             return
         self._show(analysis)

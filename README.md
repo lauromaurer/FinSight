@@ -1,8 +1,8 @@
 # FinSight
 
 A local desktop app that turns a monthly bank CSV export into a categorized
-spending dashboard and cash-flow diagram — no server, no cloud upload, all
-processing stays on your machine.
+Dashboard and Money flow diagram — no server, no cloud, all processing stays
+on your machine.
 
 ## Overview
 
@@ -10,11 +10,11 @@ FinSight reads transaction exports from your bank's CSV download, auto-detects
 the delimiter/encoding/header row (bank exports often have a few descriptive
 lines before the real header, which trips up a plain `pd.read_csv`), and
 categorizes each transaction against a local rule set you build up over time.
-It's built for a simple monthly habit: at the end of the month, import that
-month's export and get an immediate read on where the money went — a KPI
-summary, a category breakdown, top merchants, a daily flow chart, and a
-Sankey-style diagram of income flowing through a cash-flow hub into expense
-categories. Everything (rules, categories, imported CSVs, exported Money flow
+It's built for a simple monthly habit, **Import → Review → Dashboard**: at the
+end of the month, Import that month's export, file any new Merchants under a
+Category in Review, and get an immediate read on where the money went — Income,
+Expenses and Saved, a Category table, and the Money flow from Income into
+Expense Categories. Rules, Categories and import overrides live under Advanced. Everything (rules, categories, imported CSVs, exported Money flow
 files) is kept in your per-user data folder, so nothing needs to be re-entered
 or re-uploaded between sessions (see [Your data](#your-data)).
 
@@ -30,7 +30,7 @@ installed to run.
   fully local, no-server experience).
 - **pandas** — CSV parsing, delimiter/encoding detection, categorization,
   and aggregation.
-- **Plotly** (+ **Kaleido** for static export) — the interactive cash-flow
+- **Plotly** — the interactive Money flow
   diagram, embedded in-app via Qt WebEngine when available, or opened as a
   local HTML file otherwise.
 - **PyInstaller** — packages the app into a standalone `.exe` (Windows) or
@@ -45,14 +45,14 @@ installed to run.
    entry point (CSV bytes + Rules + optional import overrides in, a
    `MonthAnalysis` out). It sniffs the encoding, delimiter, decimal mark and
    header row, guesses the Income, Expenses and text columns (overridable in
-   Settings), and returns "columns need checking" when it can't find them.
+   Advanced), and returns "columns need checking" when it can't find them.
 3. **Categorize** — inside the same call, each transaction's text is matched
    against the Rules (`rules.json` in your data folder). A match assigns a
    Category and, optionally, a Merchant name. Transactions no Rule matches are
    **Uncategorized** (Other is an ordinary Category you pick on purpose) and
    are grouped by Merchant for Review, where saving a Rule files them next time.
-4. **Visualize** — the Dashboard (Income, Expenses, Saved, the Category
-   table, top Merchants, daily flow) and the Money flow are all drawn from the
+4. **Dashboard** — the totals (Income, Expenses, Saved), the Category
+   table and the Money flow are all drawn from the
    same `MonthAnalysis`, so their numbers always agree. In the Money flow,
    Income Categories flow into the month, which flows out into Expense
    Categories and Saved.
@@ -82,9 +82,9 @@ python -m pytest
 CI runs the tests on Windows and macOS on every push and pull request
 (`.github/workflows/tests.yml`).
 
-If your Python/Qt install has WebEngine available, the Plotly chart renders
-inside the app. Otherwise, use the **Open interactive preview** button — it
-opens the same chart as a local HTML file in your browser while the rest of
+If your Python/Qt install has WebEngine available, the Money flow renders
+inside the app. Otherwise, use the **Open Money flow** button — it
+opens the same diagram as a local HTML file in your browser while the rest of
 the app (CSV import, categorization, rules) keeps working normally.
 
 ### Building a standalone app
@@ -121,9 +121,12 @@ FinSight/
 │   ├── __main__.py        # `python -m finsight`
 │   ├── desktop_app.py     # PySide6 GUI
 │   ├── data_store.py      # everything FinSight keeps on disk (per-user data folder)
-│   └── finsight_core.py   # CSV parsing, categorization, flow generation
+│   ├── month_analysis.py  # analyze a month: CSV detection, Rules, totals, Money flow data
+│   ├── money_flow_chart.py # draws the Money flow (Plotly)
+│   ├── check_columns.py   # the Check your columns dialog
+│   └── finsight_core.py   # bundled defaults (starter Rules, Categories)
 ├── assets/                 # app logo/icon (svg, ico, icns)
-├── default_categories.json # starter category labels bundled into releases
+├── default_categories.json # starter Categories bundled into releases
 ├── tests/                  # pytest suite
 ├── FinSight.spec            # PyInstaller build spec
 └── build_mac.sh / build_exe.bat
@@ -139,7 +142,7 @@ to the app or in the folder it was launched from:
 - macOS: `~/Library/Application Support/FinSight`
 - Windows: `%APPDATA%\FinSight`
 
-The Settings page shows the exact location and can open it. On first launch,
+Advanced > Data folder shows the exact location and can open it. On first launch,
 data from an older version (a `config/` folder next to the app or in the
 working directory, or a legacy `rules.json`) is copied in once; existing data
 is never overwritten. Interactive previews are written to a temp folder.
