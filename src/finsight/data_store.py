@@ -54,7 +54,10 @@ def old_data_folders() -> list[Path]:
 def open_user_store() -> DataStore:
     """The app's store: the per-user data folder, with old data migrated in once."""
     store = DataStore(user_data_folder())
-    store.migrate_from(old_data_folders())
+    try:
+        store.migrate_from(old_data_folders())
+    except (OSError, ValueError):
+        pass  # A failed migration must never stop FinSight from starting.
     return store
 
 
@@ -93,6 +96,18 @@ def _clean_rules(data: Any) -> list[dict[str, str]]:
                 rule["merchant"] = merchant
             rules.append(rule)
     return rules
+
+
+def _valid_rules(rules: list[dict[str, str]]) -> list[dict[str, str]]:
+    """Drop Rules whose match text isn't a valid regular expression (old versions skipped them)."""
+    valid = []
+    for rule in rules:
+        try:
+            re.compile(rule["pattern"], flags=re.IGNORECASE)
+        except re.error:
+            continue
+        valid.append(rule)
+    return valid
 
 
 def _write_atomically(path: Path, data: bytes) -> None:
@@ -139,8 +154,12 @@ class DataStore:
         return self.rules_path.exists()
 
     def load_rules(self) -> list[dict[str, str]]:
-        """Saved Rules, or the starter Rules when none are saved (or the file is unreadable)."""
-        return _clean_rules(_read_json(self.rules_path)) or [dict(rule) for rule in DEFAULT_RULES]
+        """Saved Rules (possibly none), or the starter Rules when no Rules file exists yet
+        (or it is unreadable)."""
+        data = _read_json(self.rules_path)
+        if not isinstance(data, list):
+            return [dict(rule) for rule in DEFAULT_RULES]
+        return _clean_rules(data)
 
     def save_rules(self, rules: list[dict[str, str]]) -> None:
         """Save Rules. Raises InvalidRuleError (saving nothing) if any pattern is invalid regex."""
@@ -152,7 +171,8 @@ class DataStore:
         self._write_json(self.rules_path, rules)
 
     def load_categories(self) -> list[str]:
-        """Saved Categories, sorted; the bundled default Categories when none are saved."""
+        """Saved Categories (possibly none), sorted; the bundled default Categories when
+        no Categories file exists yet (or it is unreadable)."""
         data = _read_json(self.categories_path)
         if not isinstance(data, list):
             data = load_default_categories()
@@ -246,13 +266,19 @@ class DataStore:
         files = [path for path in config.glob("*") if path.is_file()] if config.is_dir() else []
         for path in files:
             destination = self.root / path.name
-            if not destination.exists():
+            if destination.exists():
+                continue
+            if destination == self.rules_path:
+                rules = _valid_rules(_clean_rules(_read_json(path)))
+                if rules:
+                    self.save_rules(rules)
+            else:
                 _write_atomically(destination, path.read_bytes())
         return bool(files)
 
     def _copy_legacy_rules(self, folder: Path) -> bool:
         for candidate in [folder / "rules.json", *sorted(folder.glob("rules-*.json"))]:
-            rules = _clean_rules(_read_json(candidate)) if candidate.is_file() else []
+            rules = _valid_rules(_clean_rules(_read_json(candidate))) if candidate.is_file() else []
             if rules:
                 self.save_rules(rules)
                 return True

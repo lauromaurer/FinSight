@@ -252,3 +252,47 @@ def test_a_new_category_picked_in_review_is_saved_but_other_is_not_added(tmp_pat
     store.categorize_merchant("Shop+Co (Zurich) A.G.", "Other")
 
     assert DataStore(tmp_path).load_categories() == ["Groceries", "Snacks"]
+
+
+def test_deleting_every_rule_keeps_the_rules_empty_on_next_launch(tmp_path):
+    DataStore(tmp_path).save_rules([])
+
+    assert DataStore(tmp_path).load_rules() == []
+
+
+def test_removing_every_category_keeps_the_categories_empty_on_next_launch(tmp_path):
+    DataStore(tmp_path).save_categories([])
+
+    assert DataStore(tmp_path).load_categories() == []
+
+
+def test_migration_skips_legacy_rules_that_are_not_valid_regular_expressions(tmp_path):
+    old = tmp_path / "old"
+    old.mkdir()
+    legacy = [{"pattern": "migros(", "category": "Groceries"}, {"pattern": "sbb", "category": "Transport"}]
+    (old / "rules.json").write_text(json.dumps(legacy), encoding="utf-8")
+    store = DataStore(tmp_path / "FinSight")
+
+    assert store.migrate_from([old]) is True
+
+    assert store.load_rules() == [{"pattern": "sbb", "category": "Transport"}]
+
+
+def test_migration_skips_invalid_rules_in_an_old_config_folder(tmp_path):
+    old = make_old_install(tmp_path / "old", rules=[{"pattern": "[coop", "category": "Groceries"}, *OLD_RULES])
+    store = DataStore(tmp_path / "FinSight")
+
+    store.migrate_from([old])
+
+    assert store.load_rules() == OLD_RULES
+
+
+def test_migration_of_only_invalid_legacy_rules_still_lets_the_app_start(tmp_path):
+    old = tmp_path / "old"
+    old.mkdir()
+    (old / "rules.json").write_text(json.dumps([{"pattern": "(", "category": "Groceries"}]), encoding="utf-8")
+    store = DataStore(tmp_path / "FinSight")
+
+    store.migrate_from([old])
+
+    assert store.load_rules()  # starter Rules: nothing usable was migrated
