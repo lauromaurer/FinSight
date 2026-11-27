@@ -101,6 +101,35 @@ def test_a_rule_created_for_a_merchant_moves_it_out_of_uncategorized_on_re_analy
     assert category_totals(after)["Uncategorized"] == (0.00, 1450.50)
 
 
+SPECIAL_MERCHANTS_CSV = b"""Date,Description,Debit,Credit
+2026-10-01,Shop+Co (Zurich) A.G.,40.00,
+2026-10-02,Shop+Co (Zurich) A.G.,10.00,
+2026-10-03,ShopCo (Zurich) AxG,25.00,
+2026-10-04,Shoppp+Co Zurich AxG,5.00,
+"""
+
+
+def test_a_rule_from_a_merchant_with_regex_special_characters_matches_exactly_that_merchant():
+    rule = rule_for_merchant("Shop+Co (Zurich) A.G.", "Shopping")
+
+    analysis = analyze_month(SPECIAL_MERCHANTS_CSV, [rule])
+
+    assert {(t.merchant, t.category) for t in analysis.transactions} == {
+        ("Shop+Co (Zurich) A.G.", "Shopping"),
+        ("ShopCo (Zurich) AxG", "Uncategorized"),
+        ("Shoppp+Co Zurich AxG", "Uncategorized"),
+    }
+    assert [m.merchant for m in analysis.review_merchants] == ["ShopCo (Zurich) AxG", "Shoppp+Co Zurich AxG"]
+    assert rule["merchant"] == "Shop+Co (Zurich) A.G."
+
+
+def test_a_merchant_categorized_as_other_leaves_review():
+    analysis = analyze_month(SPECIAL_MERCHANTS_CSV, [rule_for_merchant("ShopCo (Zurich) AxG", "Other")])
+
+    assert "ShopCo (Zurich) AxG" not in {m.merchant for m in analysis.review_merchants}
+    assert {c.category: c.expenses for c in analysis.categories}["Other"] == 25.00
+
+
 def test_minimum_amount_drops_small_transactions_from_totals_categories_and_review_alike():
     analysis = german_month(minimum_amount=1.0)
 

@@ -12,6 +12,7 @@ import sys
 from typing import Any, Iterable, Mapping
 
 from finsight.finsight_core import DEFAULT_RULES, load_default_categories
+from finsight.month_analysis import OTHER, rule_for_merchant
 
 
 APP_FOLDER_NAME = "FinSight"
@@ -142,6 +143,21 @@ class DataStore:
     def save_categories(self, categories: list[str]) -> None:
         cleaned = sorted(dict.fromkeys(str(item).strip() for item in categories if str(item).strip()))
         self._write_json(self.categories_path, cleaned)
+
+    def categorize_merchant(self, merchant: str, category: str) -> list[dict[str, str]]:
+        """Review: file a Merchant under a Category by saving a literal Rule for it.
+
+        Replaces any earlier Rule for that same Merchant, saves a new Category
+        (Other is always available and never saved), and returns the saved Rules.
+        """
+        rule = rule_for_merchant(merchant.strip(), category.strip())
+        rules = [r for r in self.load_rules() if r["pattern"] != rule["pattern"]]
+        rules.append(rule)
+        self.save_rules(rules)
+        categories = self.load_categories()
+        if rule["category"] != OTHER and rule["category"] not in categories:
+            self.save_categories([*categories, rule["category"]])
+        return rules
 
     @property
     def imports_dir(self) -> Path:
