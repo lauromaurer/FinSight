@@ -14,9 +14,9 @@ It's built for a simple monthly habit: at the end of the month, import that
 month's export and get an immediate read on where the money went — a KPI
 summary, a category breakdown, top merchants, a daily flow chart, and a
 Sankey-style diagram of income flowing through a cash-flow hub into expense
-categories. Everything (rules, categories, uploaded CSVs, generated plots) is
-kept in local folders next to the app, so nothing needs to be re-entered or
-re-uploaded between sessions.
+categories. Everything (rules, categories, imported CSVs, exported Money flow
+files) is kept in your per-user data folder, so nothing needs to be re-entered
+or re-uploaded between sessions (see [Your data](#your-data)).
 
 The project started as a Streamlit web prototype and was later rewritten as a
 PySide6 desktop app — running fully locally turned out simpler and more
@@ -39,15 +39,15 @@ installed to run.
 ## How it works
 
 1. **Import** — pick a CSV via the file picker; it's copied into
-   `uploaded CSV files/` for local reuse and re-analysis without re-picking
-   the file.
+   `imports/` in your data folder for local reuse and re-analysis without
+   re-picking the file.
 2. **Parse** — `finsight_core.py` sniffs the separator, encoding, and how
    many header/description rows to skip, then loads it into a DataFrame.
    Inflow/outflow and text columns are guessed from common header names but
    can be overridden.
 3. **Categorize** — each transaction's combined text columns are matched
-   against a local list of regex rules (`config/rules.json`, created on
-   first run from a small generic starter set). Matches assign a category
+   against a local list of regex rules (`rules.json` in your data folder,
+   starting from a small generic starter set). Matches assign a category
    and, optionally, a normalized merchant name. Unmatched transactions land
    in a review tab where you can categorize them and save the match as a new
    rule for next time.
@@ -56,8 +56,8 @@ installed to run.
    builds a Sankey diagram: income categories flow into a "Cash flow hub"
    node, which flows out into expense categories, each node/link labeled
    with its amount and share of the total.
-5. **Export** — save the current chart to `generated Plots/` as HTML by
-   default, or PNG when Kaleido is available.
+5. **Export** — save the current Money flow as HTML to `money-flow/` in your
+   data folder.
 
 ## Getting started
 
@@ -120,18 +120,29 @@ FinSight/
 ├── src/finsight/
 │   ├── __main__.py        # `python -m finsight`
 │   ├── desktop_app.py     # PySide6 GUI
+│   ├── data_store.py      # everything FinSight keeps on disk (per-user data folder)
 │   └── finsight_core.py   # CSV parsing, categorization, flow generation
 ├── assets/                 # app logo/icon (svg, ico, icns)
 ├── default_categories.json # starter category labels bundled into releases
 ├── tests/                  # pytest suite
 ├── FinSight.spec            # PyInstaller build spec
-├── build_mac.sh / build_exe.bat
-└── config/, generated Plots/, uploaded CSV files/   # created on first run
+└── build_mac.sh / build_exe.bat
 ```
 
-`config/`, `generated Plots/`, and `uploaded CSV files/` hold local rules and
-personal financial data — they're created automatically and excluded from
-git (see `.gitignore`).
+## Your data
+
+FinSight keeps your rules, categories, imported CSVs and exported Money flow
+files in the standard per-user data folder (see
+[ADR-0001](docs/adr/0001-user-data-in-per-user-app-data-folder.md)), never next
+to the app or in the folder it was launched from:
+
+- macOS: `~/Library/Application Support/FinSight`
+- Windows: `%APPDATA%\FinSight`
+
+The Settings page shows the exact location and can open it. On first launch,
+data from an older version (a `config/` folder next to the app or in the
+working directory, or a legacy `rules.json`) is copied in once; existing data
+is never overwritten. Interactive previews are written to a temp folder.
 
 ## Status / roadmap
 

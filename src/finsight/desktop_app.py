@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from datetime import datetime
+import atexit
 import os
 import re
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 if __package__ in (None, ""):
@@ -51,24 +52,27 @@ from finsight.finsight_core import (
     BUNDLE_DIR,
     DEFAULT_CATEGORIES_PATH,
     CsvReadOptions,
-    PLOTS_DIR,
-    UPLOADS_DIR,
     build_finsight_flow,
     combine_text_columns,
-    ensure_app_dirs,
     guess_inflow_column,
     guess_outflow_column,
     guess_text_columns,
-    load_categories,
-    load_rules,
     parse_amount_series,
     read_csv_file,
-    save_categories,
-    save_rules,
 )
+from finsight.data_store import DataStore, open_user_store, user_data_folder
 
 
-PREVIEW_DIR = Path(".preview")
+_preview_dir: Path | None = None
+
+
+def preview_dir() -> Path:
+    """A private temp folder for preview HTML, removed when the app exits."""
+    global _preview_dir
+    if _preview_dir is None:
+        _preview_dir = Path(tempfile.mkdtemp(prefix="finsight-preview-"))
+        atexit.register(shutil.rmtree, _preview_dir, ignore_errors=True)
+    return _preview_dir
 
 def resource_path(relative_path: str) -> Path:
     return BUNDLE_DIR / relative_path
@@ -205,16 +209,19 @@ QHeaderView::section {
 
 
 class FinSightWindow(QMainWindow):
-    def __init__(self) -> None:
+    def __init__(self, store: DataStore) -> None:
         super().__init__()
-        ensure_app_dirs()
+        self.store = store
         self.setWindowTitle(APP_NAME)
         if LOGO_PATH.exists():
             self.setWindowIcon(QIcon(load_logo_pixmap(256)))
         self.resize(1320, 850)
 
-        self.rules = load_rules()
-        self.categories = load_categories()
+        self.rules = store.load_rules()
+        rule_categories = [rule.get("category", "").strip() for rule in self.rules]
+        self.categories = sorted(
+            dict.fromkeys(c for c in [*store.load_categories(), *rule_categories] if c and c != "Other")
+        )
         self.df: pd.DataFrame | None = None
         self.current_csv: Path | None = None
         self.source_csv: Path | None = None
@@ -393,8 +400,7 @@ class FinSightWindow(QMainWindow):
             layout.addWidget(self.web_view, stretch=1)
 
     def _load_plotly_preview(self, view: QWidget, filename: str, fig: go.Figure) -> None:
-        PREVIEW_DIR.mkdir(exist_ok=True)
-        preview_path = PREVIEW_DIR / filename
+        preview_path = preview_dir() / filename
         fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         if QWebEngineView is None:
             return
@@ -524,10 +530,18 @@ class FinSightWindow(QMainWindow):
 
         self.file_label = QLabel("No CSV loaded")
         self.file_label.setWordWrap(True)
-        self.uploaded_file_label = QLabel(f"Uploaded CSVs are saved in: {UPLOADS_DIR}")
+        self.uploaded_file_label = QLabel(f"Imported CSVs are kept in: {self.store.imports_dir}")
         self.uploaded_file_label.setWordWrap(True)
-        self.status_label = QLabel("Rules are saved locally in config/rules.json.")
+        self.status_label = QLabel(f"Rules are saved in: {self.store.rules_path}")
         self.status_label.setWordWrap(True)
+        self.data_folder_label = QLabel(str(self.store.root))
+        self.data_folder_label.setWordWrap(True)
+        self.data_folder_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        open_data_folder = QPushButton("Open data folder")
+        open_data_folder.clicked.connect(self.open_data_folder)
+        info_layout.addWidget(QLabel("Data folder"), 3, 0)
+        info_layout.addWidget(self.data_folder_label, 3, 1)
+        info_layout.addWidget(open_data_folder, 3, 2)
         info_layout.addWidget(QLabel("Current CSV"), 0, 0)
         info_layout.addWidget(self.file_label, 0, 1)
         info_layout.addWidget(QLabel("Saved copy"), 1, 0)
@@ -621,19 +635,17 @@ class FinSightWindow(QMainWindow):
         source = Path(file_name)
         try:
             self.source_csv = source
-            self.current_csv = self._store_uploaded_csv(source)
+            self.current_csv = self.store.save_import(source)
+            self.store.remember_last_import(self.current_csv)
         except Exception as exc:
             QMessageBox.critical(self, "CSV storage error", f"Could not save a local copy of the CSV:\n{exc}")
             return
         self.reload_csv()
 
-    def _store_uploaded_csv(self, source: Path) -> Path:
-        ensure_app_dirs()
-        UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
-        stamp = datetime.now().strftime("%d.%m.%Y_%H-%M-%S")
-        destination = UPLOADS_DIR / f"{source.stem}_{stamp}{source.suffix or '.csv'}"
-        shutil.copy2(source, destination)
-        return destination
+    def open_data_folder(self) -> None:
+        self.store.root.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(self.store.root)))
+
     def reload_csv(self) -> None:
         if self.current_csv is None:
             return
@@ -716,7 +728,7 @@ class FinSightWindow(QMainWindow):
         self.current_fig = fig
         self.current_summary = summary
         if QWebEngineView is None:
-            self.web_view.setText("Plot built. Open the interactive preview or save it to generated Plots.")
+            self.web_view.setText("Plot built. Open the interactive preview or save it to your data folder.")
         else:
             self._load_plotly_preview(self.web_view, "finsight_flow_preview.html", fig)
         self.refresh_uncategorized()
@@ -725,8 +737,7 @@ class FinSightWindow(QMainWindow):
     def open_preview_external(self) -> None:
         if self.current_fig is None:
             return
-        PREVIEW_DIR.mkdir(exist_ok=True)
-        preview_path = PREVIEW_DIR / "finsight_preview.html"
+        preview_path = preview_dir() / "finsight_preview.html"
         self.current_fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
@@ -1089,7 +1100,7 @@ class FinSightWindow(QMainWindow):
         if merchant:
             rule["merchant"] = merchant
         self.rules.append(rule)
-        save_rules(self.rules)
+        self.store.save_rules(self.rules)
         self.populate_rules_table()
         self.new_pattern.clear()
         self.new_merchant.clear()
@@ -1136,11 +1147,11 @@ class FinSightWindow(QMainWindow):
             QMessageBox.warning(self, "Missing labels", "Create at least one category label.")
             return
         self.categories = sorted(dict.fromkeys(categories))
-        save_categories(self.categories)
+        self.store.save_categories(self.categories)
         self.populate_categories_table()
         self.populate_category_combo()
         self.refresh_plot()
-        QMessageBox.information(self, "Labels saved", "Category labels were saved to config/categories.json.")
+        QMessageBox.information(self, "Labels saved", f"Category labels were saved to {self.store.categories_path}.")
 
     def populate_rules_table(self) -> None:
         self.rules_table.setRowCount(len(self.rules))
@@ -1177,28 +1188,21 @@ class FinSightWindow(QMainWindow):
                     rule["merchant"] = merchant
                 rules.append(rule)
         self.rules = rules
-        save_rules(self.rules)
+        self.store.save_rules(self.rules)
         self.refresh_plot()
-        QMessageBox.information(self, "Rules saved", "Rules were saved to config/rules.json.")
+        QMessageBox.information(self, "Rules saved", f"Rules were saved to {self.store.rules_path}.")
 
     def save_plot(self) -> None:
         if self.current_fig is None:
             return
-        ensure_app_dirs()
         source = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "finsight"
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        html_path = PLOTS_DIR / f"{source}_finsight_{stamp}.html"
-        self.current_fig.write_html(str(html_path), include_plotlyjs="cdn", full_html=True)
-
-        png_note = ""
+        html = self.current_fig.to_html(include_plotlyjs="cdn", full_html=True)
         try:
-            png_path = PLOTS_DIR / f"{source}_finsight_{stamp}.png"
-            self.current_fig.write_image(str(png_path), scale=2)
-            png_note = f"\nPNG: {png_path}"
-        except Exception:
-            png_note = "\nPNG export skipped. Install/repair kaleido if you also want static PNG output."
-
-        QMessageBox.information(self, "Plot saved", f"Interactive HTML: {html_path}{png_note}")
+            html_path = self.store.save_money_flow(html, source)
+        except Exception as exc:
+            QMessageBox.critical(self, "Export error", f"Could not save the Money flow:\n{exc}")
+            return
+        QMessageBox.information(self, "Money flow saved", f"Interactive HTML: {html_path}")
 
 
 SELF_CHECK_FLAG = "--self-check"
@@ -1211,7 +1215,9 @@ def _report(message: str, stream) -> None:
 
 
 def self_check() -> int:
-    """Start without a window: core modules loaded, bundled files present, Qt up.
+    """Start without a window: core modules loaded, bundled files present, Qt up,
+    and the data store working (in a throwaway temp folder: the self-check never
+    writes to the real data folder or the working directory).
 
     Returns the process exit code: 0 on success, 1 on failure.
     """
@@ -1219,11 +1225,19 @@ def self_check() -> int:
         missing = [str(path) for path in (LOGO_PATH, DEFAULT_CATEGORIES_PATH) if not path.exists()]
         if missing:
             raise FileNotFoundError(f"bundled files missing: {', '.join(missing)}")
+        with tempfile.TemporaryDirectory(prefix="finsight-self-check-") as scratch:
+            store = DataStore(Path(scratch) / "FinSight")
+            store.save_rules(store.load_rules())
+            store.save_categories(store.load_categories())
+            if not store.has_rules() or not store.load_categories():
+                raise RuntimeError("data store round-trip failed")
+        data_folder = user_data_folder()
         os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
         QApplication.instance() or QApplication([sys.argv[0]])
     except Exception as exc:
         _report(f"FinSight self-check FAILED: {exc!r}", sys.stderr)
         return 1
+    _report(f"Data folder: {data_folder}", sys.stdout)
     _report("FinSight self-check OK", sys.stdout)
     return 0
 
@@ -1236,7 +1250,7 @@ def main(argv: list[str] | None = None) -> int:
     if LOGO_PATH.exists():
         app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)
-    window = FinSightWindow()
+    window = FinSightWindow(open_user_store())
     window.show()
     return app.exec()
 
