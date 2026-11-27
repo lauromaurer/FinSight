@@ -56,6 +56,10 @@ _Avoid_: Outflow, spending
 Income minus Expenses for the imported month; negative when more went out than came in.
 _Avoid_: Net, total saved
 
+**Overspent**:
+The amount by which Expenses exceeded Income in the imported month, shown as the balancing source in the Money flow.
+_Avoid_: deficit, negative saved
+
 **Money flow**:
 The diagram showing Income streams flowing into the month and out into Expense categories.
 _Avoid_: Plot, chart, Sankey, FinSight flow, cash flow hub

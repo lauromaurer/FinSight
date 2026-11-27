@@ -1,0 +1,17 @@
+Kontonummer;0000 00000000.0A
+IBAN;CH00 0000 0000 0000 0000 0
+Von;01.10.2026
+Bis;31.10.2026
+
+Abschlussdatum;Buchungsdatum;Währung;Belastung;Gutschrift;Saldo;Beschreibung1;Beschreibung2;Beschreibung3
+01.10.2026;01.10.2026;CHF;;5200.00;6200.00;Example Employer AG;Lohn Oktober;
+02.10.2026;02.10.2026;CHF;-84.35;;6115.65;Migros Supermarkt;Zürich;Karte 0000
+05.10.2026;05.10.2026;CHF;-42.10;;6073.55;Migros Supermarkt;Bern;Karte 0000
+07.10.2026;07.10.2026;CHF;-3.80;;6069.75;SBB CFF FFS;Ticket;
+10.10.2026;10.10.2026;CHF;-1450.00;;4619.75;Example Immobilien AG;Miete Oktober;
+12.10.2026;12.10.2026;CHF;-25.00;;4594.75;PAYPAL *JANE DOE;;
+15.10.2026;15.10.2026;CHF;;40.00;4634.75;PAYPAL *JOHN ROE;;
+20.10.2026;20.10.2026;CHF;-18.50;;4616.25;Pizzeria Bella;Bern;
+22.10.2026;22.10.2026;CHF;-60.00;;4556.25;Flea Market Stand;;
+25.10.2026;25.10.2026;CHF;-0.50;;4555.75;Bank Fee;Kontoführung;
+28.10.2026;28.10.2026;CHF;-12.00;;4543.75;Café Central *Bern;;

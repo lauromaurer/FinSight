@@ -1,0 +1,107 @@
+name: Release
+
+# Pushing a v* tag builds Windows and macOS from FinSight.spec, self-checks each
+# built app, zips it and attaches both zips to a GitHub Release.
+# Everything else is a dry run: same build, self-check and zips, uploaded as
+# workflow artifacts only; no Release is created. Dry runs happen when run by
+# hand (workflow_dispatch) and on branch pushes that change the build itself.
+on:
+  push:
+    tags: ["v*"]
+    branches: ["**"]
+    paths:
+      - FinSight.spec
+      - requirements.txt
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: Windows
+            app: dist/FinSight/FinSight.exe
+          - os: macos-latest
+            platform: macOS
+            app: dist/FinSight.app/Contents/MacOS/FinSight
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+      VERSION: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || format('dev-{0}', github.sha) }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Build with FinSight.spec
+        run: python -m PyInstaller --noconfirm --clean FinSight.spec
+
+      - name: Self-check the built app
+        env:
+          FINSIGHT_FROZEN_APP: ${{ matrix.app }}
+        run: python -m pytest -v tests/test_frozen_app.py
+
+      - name: Zip (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force release | Out-Null
+          Compress-Archive -Path dist/FinSight -DestinationPath "release/FinSight-$env:VERSION-${{ matrix.platform }}.zip"
+
+      - name: Zip (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p release
+          ditto -c -k --keepParent dist/FinSight.app "release/FinSight-$VERSION-${{ matrix.platform }}.zip"
+
+      - name: Show zip
+        run: ls -l release
+
+      - uses: actions/upload-artifact@v6
+        with:
+          name: FinSight-${{ matrix.platform }}
+          path: release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    name: GitHub Release
+    needs: build
+    # Only a pushed v* tag publishes; a manual run never does, whatever its ref.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          path: release
+          merge-multiple: true
+
+      - name: Create the Release with both zips
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${{ github.ref_name }}" release/*.zip
+          --repo "${{ github.repository }}"
+          --title "FinSight ${{ github.ref_name }}"
+          --generate-notes
