@@ -14,7 +14,14 @@ import sys
 from typing import Any, Iterable, Mapping
 
 from finsight.finsight_core import DEFAULT_RULES, load_default_categories
-from finsight.month_analysis import OTHER, ImportOverrides, rule_for_merchant
+from finsight.month_analysis import (
+    OTHER,
+    ImportOverrides,
+    MonthAnalysis,
+    UnreadableCsvError,
+    analyze_month,
+    rule_for_merchant,
+)
 
 
 APP_FOLDER_NAME = "FinSight"
@@ -340,6 +347,35 @@ class DataStore:
         except (TypeError, ValueError):
             return None
         return ImportOverrides(**values)
+
+    def analyze_import(
+        self,
+        data: bytes,
+        rules: list[dict[str, str]],
+        *,
+        categories: list[str] | None = None,
+        minimum_amount: float = 0.0,
+    ) -> tuple[MonthAnalysis, ImportOverrides]:
+        """Analyze an Imported CSV with the choices remembered for its bank format.
+
+        If the remembered choices no longer work for this file (unreadable, or the
+        columns would need checking), falls back to what FinSight detects on its own;
+        the caller shows Check your columns if that needs checking too. Returns the
+        analysis and the overrides it used. Raises UnreadableCsvError when the file
+        isn't a readable CSV at all.
+        """
+        options = {"categories": categories, "minimum_amount": minimum_amount}
+        detected = analyze_month(data, rules, **options)
+        remembered = self.remembered_import_overrides(detected.columns)
+        if remembered is None:
+            return detected, ImportOverrides()
+        try:
+            analysis = analyze_month(data, rules, remembered, **options)
+        except UnreadableCsvError:
+            return detected, ImportOverrides()
+        if analysis.columns_need_checking:
+            return detected, ImportOverrides()
+        return analysis, remembered
 
     @staticmethod
     def _unique_path(folder: Path, stem: str, suffix: str) -> Path:

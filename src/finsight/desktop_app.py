@@ -54,7 +54,7 @@ from finsight.finsight_core import (
     BUNDLE_DIR,
     DEFAULT_CATEGORIES_PATH,
 )
-from finsight.check_columns import CheckColumnsDialog
+from finsight.check_columns import DECIMALS, SEPARATORS, CheckColumnsDialog
 from finsight.data_store import DataStore, InvalidRuleError, open_user_store, user_data_folder
 from finsight.money_flow_chart import money_flow_figure
 from finsight.month_analysis import (
@@ -353,12 +353,12 @@ class FinSightWindow(QMainWindow):
         layout.addLayout(header)
 
         metrics = QHBoxLayout()
-        self.total_inflow_metric = self._metric_card("Income", "CHF 0.00")
-        self.total_outflow_metric = self._metric_card("Expenses", "CHF 0.00")
-        self.total_saved_metric = self._metric_card("Saved", "CHF 0.00")
-        metrics.addWidget(self.total_inflow_metric)
-        metrics.addWidget(self.total_outflow_metric)
-        metrics.addWidget(self.total_saved_metric)
+        self.income_metric = self._metric_card("Income", "CHF 0.00")
+        self.expenses_metric = self._metric_card("Expenses", "CHF 0.00")
+        self.saved_metric = self._metric_card("Saved", "CHF 0.00")
+        metrics.addWidget(self.income_metric)
+        metrics.addWidget(self.expenses_metric)
+        metrics.addWidget(self.saved_metric)
         layout.addLayout(metrics)
 
         if QWebEngineView is None:
@@ -420,12 +420,12 @@ class FinSightWindow(QMainWindow):
         current.setHorizontalSpacing(12)
         self.file_label = QLabel("Nothing Imported yet")
         self.file_label.setWordWrap(True)
-        self.uploaded_file_label = QLabel(f"Imported CSV files are kept in: {self.store.imports_dir}")
-        self.uploaded_file_label.setWordWrap(True)
+        self.imported_file_label = QLabel(f"Imported CSV files are kept in: {self.store.imports_dir}")
+        self.imported_file_label.setWordWrap(True)
         current.addWidget(QLabel("Current month"), 0, 0)
         current.addWidget(self.file_label, 0, 1)
         current.addWidget(QLabel("Saved copy"), 1, 0)
-        current.addWidget(self.uploaded_file_label, 1, 1)
+        current.addWidget(self.imported_file_label, 1, 1)
         current.setColumnStretch(1, 1)
         panel_layout.addLayout(current)
         layout.addWidget(panel)
@@ -552,9 +552,9 @@ class FinSightWindow(QMainWindow):
         grid.setHorizontalSpacing(12)
         grid.setVerticalSpacing(10)
         self.sep_box = QComboBox()
-        self.sep_box.addItems(["Auto", ";", ",", "\\t", "|"])
+        self.sep_box.addItems(list(SEPARATORS))
         self.decimal_box = QComboBox()
-        self.decimal_box.addItems(["Auto", ".", ","])
+        self.decimal_box.addItems(list(DECIMALS))
         self.skip_auto = QCheckBox("Detect header row")
         self.skip_auto.setChecked(True)
         self.skip_rows = QSpinBox()
@@ -563,8 +563,8 @@ class FinSightWindow(QMainWindow):
         self.skip_rows.setEnabled(False)
         self.skip_auto.toggled.connect(self.skip_rows.setDisabled)
 
-        self.inflow_box = QComboBox()
-        self.outflow_box = QComboBox()
+        self.income_box = QComboBox()
+        self.expenses_box = QComboBox()
         self.min_amount = QSpinBox()
         self.min_amount.setRange(0, 100_000)
         self.min_amount.setSingleStep(10)
@@ -595,8 +595,8 @@ class FinSightWindow(QMainWindow):
         grid.addWidget(QLabel("Income column"), 4, 0)
         grid.addWidget(QLabel("Expenses column"), 4, 1)
         grid.addWidget(QLabel("Minimum amount"), 4, 2)
-        grid.addWidget(self.inflow_box, 5, 0)
-        grid.addWidget(self.outflow_box, 5, 1)
+        grid.addWidget(self.income_box, 5, 0)
+        grid.addWidget(self.expenses_box, 5, 1)
         grid.addWidget(self.min_amount, 5, 2)
         grid.addWidget(QLabel("Text columns (Rules match against these)"), 6, 0, 1, 3)
         grid.addWidget(self.text_table, 7, 0, 1, 3)
@@ -643,8 +643,8 @@ class FinSightWindow(QMainWindow):
 
     def _set_ready_state(self, ready: bool) -> None:
         for widget in (
-            self.inflow_box,
-            self.outflow_box,
+            self.income_box,
+            self.expenses_box,
             self.text_table,
             self.min_amount,
             self.refresh_button,
@@ -656,9 +656,8 @@ class FinSightWindow(QMainWindow):
     def _overrides(self, include_columns: bool) -> ImportOverrides:
         """Import overrides from Advanced > Columns. Columns only once the user has seen them."""
         base = self.import_overrides
-        sep = self.sep_box.currentText()
-        sep = base.sep if sep == "Auto" else ("\t" if sep == "\\t" else sep)
-        decimal = base.decimal if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
+        sep = SEPARATORS[self.sep_box.currentText()] or base.sep
+        decimal = DECIMALS[self.decimal_box.currentText()] or base.decimal
         header_row = base.header_row if self.skip_auto.isChecked() else self.skip_rows.value()
         if not include_columns:
             return replace(base, sep=sep, decimal=decimal, header_row=header_row)
@@ -666,18 +665,19 @@ class FinSightWindow(QMainWindow):
             sep=sep,
             decimal=decimal,
             header_row=header_row,
-            income_column=self.inflow_box.currentText() or None,
-            expenses_column=self.outflow_box.currentText() or None,
+            income_column=self.income_box.currentText() or None,
+            expenses_column=self.expenses_box.currentText() or None,
             text_columns=tuple(self.selected_text_columns()),
             date_column=self.analysis.settings.date_column if self.analysis else None,
         )
 
-    def _analyze(self, include_columns: bool) -> ImportOverrides | None:
+    def _analyze(self, include_columns: bool, *, remember: bool = False) -> ImportOverrides | None:
         """Re-analyze the current month with the current Rules and overrides.
 
         If the columns then need checking, the Check your columns dialog opens
         (its choices are remembered for this bank format); cancelling it keeps
-        the month as it was. Returns the overrides used, or None if unchanged.
+        the month as it was. `remember` also remembers the overrides when no
+        dialog was needed. Returns the overrides now in use, or None if unchanged.
         """
         assert self.csv_bytes is not None
         overrides = self._overrides(include_columns)
@@ -704,9 +704,11 @@ class FinSightWindow(QMainWindow):
             if dialog.exec() != QDialog.Accepted:
                 return None
             analysis, overrides = dialog.analysis, dialog.overrides
+            remember = True
+        if remember:
             self._remember_overrides(overrides)
-            self.import_overrides = overrides
         self.analysis = analysis
+        self.import_overrides = overrides
         return overrides
 
     def _remember_overrides(self, overrides: ImportOverrides) -> None:
@@ -722,26 +724,17 @@ class FinSightWindow(QMainWindow):
         """Advanced > Columns > Apply: use the chosen columns now and for this bank format from now on."""
         if self.csv_bytes is None:
             return
-        overrides = self._analyze(include_columns=True)
-        if overrides is None:
+        if self._analyze(include_columns=True, remember=True) is None:
             return
-        self.import_overrides = overrides
-        self._remember_overrides(overrides)
         self.populate_columns()
         self.populate_preview()
         self.render_analysis()
 
     def _analyze_import(self, data: bytes) -> tuple[MonthAnalysis, ImportOverrides]:
-        """Analyze an Imported CSV, applying the choices remembered for its bank format.
-
-        Raises UnreadableCsvError when the file isn't a readable CSV.
-        """
-        options = {"categories": self._category_names(), "minimum_amount": float(self.min_amount.value())}
-        analysis = analyze_month(data, self.rules, **options)
-        remembered = self.store.remembered_import_overrides(analysis.columns)
-        if remembered is None:
-            return analysis, ImportOverrides()
-        return analyze_month(data, self.rules, remembered, **options), remembered
+        """Analyze an Imported CSV with the choices remembered for its bank format."""
+        return self.store.analyze_import(
+            data, self.rules, categories=self._category_names(), minimum_amount=float(self.min_amount.value())
+        )
 
     def open_csv(self) -> None:
         """Import: pick a CSV; only ask about columns when they can't be detected.
@@ -815,15 +808,18 @@ class FinSightWindow(QMainWindow):
         self.import_overrides = overrides
         self.current_csv = copy
         self.source_csv = source
-        self.sep_box.setCurrentText("Auto")
-        self.decimal_box.setCurrentText("Auto")
-        self.skip_auto.setChecked(True)
+        self._reset_file_format_choices()
         self.file_label.setText(str(source or copy))
-        self.uploaded_file_label.setText(str(copy))
+        self.imported_file_label.setText(str(copy))
         self.populate_columns()
         self.populate_preview()
         self._set_ready_state(True)
         self.render_analysis()
+
+    def _reset_file_format_choices(self) -> None:
+        self.sep_box.setCurrentText("Auto")
+        self.decimal_box.setCurrentText("Auto")
+        self.skip_auto.setChecked(True)
 
     def open_data_folder(self) -> None:
         self.store.root.mkdir(parents=True, exist_ok=True)
@@ -838,29 +834,23 @@ class FinSightWindow(QMainWindow):
         except OSError as exc:
             QMessageBox.critical(self, "Can't read this file", f"FinSight couldn't read the CSV:\n{exc}")
             return
-        self.sep_box.setCurrentText("Auto")
-        self.decimal_box.setCurrentText("Auto")
-        self.skip_auto.setChecked(True)
-        if self._analyze(include_columns=False) is None:
+        self._reset_file_format_choices()
+        overrides = self._analyze(include_columns=False)
+        if overrides is None or self.analysis is None:
             return
-        self.file_label.setText(str(self.source_csv or self.current_csv))
-        self.uploaded_file_label.setText(str(self.current_csv))
-        self.populate_columns()
-        self.populate_preview()
-        self._set_ready_state(True)
-        self.render_analysis()
+        self._show_month(self.csv_bytes, self.analysis, overrides, self.current_csv, self.source_csv)
 
     def populate_columns(self) -> None:
         if self.analysis is None:
             return
         columns = list(self.analysis.columns)
         settings = self.analysis.settings
-        self.inflow_box.clear()
-        self.outflow_box.clear()
-        self.inflow_box.addItems([""] + columns)
-        self.outflow_box.addItems([""] + columns)
-        self.inflow_box.setCurrentText(settings.income_column or "")
-        self.outflow_box.setCurrentText(settings.expenses_column or "")
+        self.income_box.clear()
+        self.expenses_box.clear()
+        self.income_box.addItems([""] + columns)
+        self.expenses_box.addItems([""] + columns)
+        self.income_box.setCurrentText(settings.income_column or "")
+        self.expenses_box.setCurrentText(settings.expenses_column or "")
 
         self.text_table.setRowCount(len(columns))
         for row, column in enumerate(columns):
@@ -880,7 +870,7 @@ class FinSightWindow(QMainWindow):
                 columns.append(name.text())
         return columns
 
-    def refresh_plot(self) -> None:
+    def refresh_month(self) -> None:
         """Re-analyze with the current Rules and Columns, then redraw every page."""
         if self.csv_bytes is None:
             return
@@ -917,11 +907,11 @@ class FinSightWindow(QMainWindow):
         if analysis is None:
             return
         self.month_header.setText(analysis.month_label)
-        self.total_inflow_metric.value_label.setText(_chf(analysis.income))  # type: ignore[attr-defined]
-        self.total_outflow_metric.value_label.setText(_chf(analysis.expenses))  # type: ignore[attr-defined]
+        self.income_metric.value_label.setText(_chf(analysis.income))  # type: ignore[attr-defined]
+        self.expenses_metric.value_label.setText(_chf(analysis.expenses))  # type: ignore[attr-defined]
         saved = analysis.saved
-        self.total_saved_metric.value_label.setText(_chf(saved))  # type: ignore[attr-defined]
-        self.total_saved_metric.value_label.setStyleSheet(  # type: ignore[attr-defined]
+        self.saved_metric.value_label.setText(_chf(saved))  # type: ignore[attr-defined]
+        self.saved_metric.value_label.setStyleSheet(  # type: ignore[attr-defined]
             "color: #dc2626;" if saved < 0 else ""
         )
 
@@ -1044,7 +1034,7 @@ class FinSightWindow(QMainWindow):
         self.categories = self._merged_categories()
         self.populate_rules_table()
         self.populate_categories_table()
-        self.refresh_plot()
+        self.refresh_month()
 
     def _merged_categories(self) -> list[str]:
         rule_categories = [rule.get("category", "").strip() for rule in self.rules]
@@ -1105,7 +1095,7 @@ class FinSightWindow(QMainWindow):
         self.populate_categories_table()
         self.populate_rules_table()
         self.populate_category_combo()
-        self.refresh_plot()
+        self.refresh_month()
 
     def add_category(self) -> None:
         name = self._ask_category_name("Add Category", "Name of the new Category:")
@@ -1211,7 +1201,7 @@ class FinSightWindow(QMainWindow):
         self.rules = rules
         self.categories = self._merged_categories()
         self.populate_categories_table()
-        self.refresh_plot()
+        self.refresh_month()
         QMessageBox.information(self, "Rules saved", f"Your Rules were saved to {self.store.rules_path}.")
 
     def export_money_flow(self) -> None:

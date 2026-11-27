@@ -61,3 +61,45 @@ def test_choices_for_the_same_format_are_replaced_not_merged(tmp_path):
     store.remember_import_overrides(columns, ImportOverrides(income_column="Col3"))
 
     assert store.remembered_import_overrides(columns) == ImportOverrides(income_column="Col3")
+
+
+def test_an_import_applies_the_choices_remembered_for_its_bank_format(tmp_path):
+    store = DataStore(tmp_path)
+    store.remember_import_overrides(analyze_month(UNRECOGNISED, RULES).columns, CHOSEN)
+
+    analysis, overrides = store.analyze_import(UNRECOGNISED, RULES)
+
+    assert overrides == CHOSEN
+    assert not analysis.columns_need_checking
+    assert analysis.expenses == 19.5
+
+
+ENGLISH = (FIXTURES / "comma_english.csv").read_bytes()
+
+
+def test_remembered_choices_that_make_the_file_unreadable_fall_back_to_detection(tmp_path):
+    store = DataStore(tmp_path)
+    store.remember_import_overrides(analyze_month(ENGLISH, []).columns, ImportOverrides(header_row=50))
+
+    analysis, overrides = store.analyze_import(ENGLISH, [])
+
+    assert overrides == ImportOverrides()
+    assert analysis.expenses == analyze_month(ENGLISH, []).expenses > 0
+
+
+def test_remembered_choices_whose_columns_need_checking_fall_back_to_detection(tmp_path):
+    store = DataStore(tmp_path)
+    gone = ImportOverrides(expenses_column="Gone", text_columns=("Gone too",))
+    store.remember_import_overrides(analyze_month(ENGLISH, []).columns, gone)
+
+    analysis, overrides = store.analyze_import(ENGLISH, [])
+
+    assert overrides == ImportOverrides()
+    assert not analysis.columns_need_checking
+
+
+def test_an_unrecognised_format_without_remembered_choices_still_needs_checking(tmp_path):
+    analysis, overrides = DataStore(tmp_path).analyze_import(UNRECOGNISED, RULES)
+
+    assert overrides == ImportOverrides()
+    assert analysis.columns_need_checking

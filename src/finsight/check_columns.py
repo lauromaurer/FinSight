@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 from finsight.month_analysis import ImportOverrides, MonthAnalysis, UnreadableCsvError, analyze_month
 
 PREVIEW_ROWS = 5
+# Delimiter / decimal mark choices (shown text -> value, None = detect); Advanced uses them too.
 SEPARATORS = {"Auto": None, ";": ";", ",": ",", "Tab": "\t", "|": "|"}
 DECIMALS = {"Auto": None, ".": ".", ",": ","}
 
@@ -161,7 +162,7 @@ class CheckColumnsDialog(QDialog):
                 minimum_amount=self._minimum_amount,
             )
         except UnreadableCsvError as exc:
-            self.status.setText(f"FinSight can't read the file with these choices:{exc}")
+            self.status.setText(f"FinSight can't read the file with these choices:\n{exc}")
             self.buttons.button(QDialogButtonBox.Ok).setEnabled(False)
             return
         self._show(analysis)
