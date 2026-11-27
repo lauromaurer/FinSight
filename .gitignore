@@ -6,6 +6,8 @@ __pycache__/
 
 # Personal financial data and generated output
 *.csv
+# ...except the hand-written, anonymised test fixtures.
+!tests/fixtures/*.csv
 rules-*.json
 generated Plots/
 uploaded CSV files/

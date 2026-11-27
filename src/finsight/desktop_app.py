@@ -51,16 +51,17 @@ from finsight.finsight_core import (
     APP_NAME,
     BUNDLE_DIR,
     DEFAULT_CATEGORIES_PATH,
-    CsvReadOptions,
-    build_finsight_flow,
-    combine_text_columns,
-    guess_inflow_column,
-    guess_outflow_column,
-    guess_text_columns,
-    parse_amount_series,
-    read_csv_file,
 )
 from finsight.data_store import DataStore, open_user_store, user_data_folder
+from finsight.money_flow_chart import money_flow_figure
+from finsight.month_analysis import (
+    OTHER,
+    ImportOverrides,
+    MonthAnalysis,
+    UnreadableCsvError,
+    analyze_month,
+    rule_for_merchant,
+)
 
 
 _preview_dir: Path | None = None
@@ -208,6 +209,9 @@ QHeaderView::section {
 """
 
 
+SETTINGS_PAGE = 5
+
+
 class FinSightWindow(QMainWindow):
     def __init__(self, store: DataStore) -> None:
         super().__init__()
@@ -222,11 +226,11 @@ class FinSightWindow(QMainWindow):
         self.categories = sorted(
             dict.fromkeys(c for c in [*store.load_categories(), *rule_categories] if c and c != "Other")
         )
-        self.df: pd.DataFrame | None = None
+        self.csv_bytes: bytes | None = None
+        self.analysis: MonthAnalysis | None = None
         self.current_csv: Path | None = None
         self.source_csv: Path | None = None
         self.current_fig = None
-        self.current_summary = None
 
         root = QWidget()
         self.setCentralWidget(root)
@@ -332,10 +336,10 @@ class FinSightWindow(QMainWindow):
         layout.setSpacing(10)
 
         metrics = QHBoxLayout()
-        self.total_outflow_metric = self._metric_card("Total Outflow", "CHF 0.00")
-        self.total_inflow_metric = self._metric_card("Total Inflow", "CHF 0.00")
-        self.total_saved_metric = self._metric_card("Total Saved", "CHF 0.00")
-        self.period_metric = self._metric_card("Time Period", "No dates")
+        self.total_outflow_metric = self._metric_card("Expenses", "CHF 0.00")
+        self.total_inflow_metric = self._metric_card("Income", "CHF 0.00")
+        self.total_saved_metric = self._metric_card("Saved", "CHF 0.00")
+        self.period_metric = self._metric_card("Month", "No dates")
         metrics.addWidget(self.total_outflow_metric)
         metrics.addWidget(self.total_inflow_metric)
         metrics.addWidget(self.total_saved_metric)
@@ -363,7 +367,7 @@ class FinSightWindow(QMainWindow):
         self.top_merchants_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
         self.category_table = QTableWidget(0, 4)
-        self.category_table.setHorizontalHeaderLabels(["Category", "Income", "Expenses", "Net"])
+        self.category_table.setHorizontalHeaderLabels(["Category", "Income", "Expenses", "Share of Expenses"])
         self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.category_table.setAlternatingRowColors(True)
         self.category_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -596,8 +600,8 @@ class FinSightWindow(QMainWindow):
         settings_layout.addWidget(QLabel("Manual rows to skip"), 2, 2)
         settings_layout.addWidget(self.skip_rows, 3, 2)
 
-        settings_layout.addWidget(QLabel("Inflow column"), 4, 0)
-        settings_layout.addWidget(QLabel("Outflow column"), 4, 1)
+        settings_layout.addWidget(QLabel("Income column"), 4, 0)
+        settings_layout.addWidget(QLabel("Expenses column"), 4, 1)
         settings_layout.addWidget(QLabel("Minimum amount"), 4, 2)
         settings_layout.addWidget(self.inflow_box, 5, 0)
         settings_layout.addWidget(self.outflow_box, 5, 1)
@@ -621,12 +625,38 @@ class FinSightWindow(QMainWindow):
         ):
             widget.setEnabled(ready)
 
-    def _read_options(self) -> CsvReadOptions:
+    def _overrides(self, include_columns: bool) -> ImportOverrides:
+        """Import overrides from the Settings page. Columns only once the user has seen them."""
         sep = self.sep_box.currentText()
-        if sep == "\\t":
-            sep = "\t"
-        skip = None if self.skip_auto.isChecked() else self.skip_rows.value()
-        return CsvReadOptions(sep=sep, decimal=self.decimal_box.currentText(), skip_rows=skip)
+        sep = None if sep == "Auto" else ("\t" if sep == "\\t" else sep)
+        decimal = None if self.decimal_box.currentText() == "Auto" else self.decimal_box.currentText()
+        header_row = None if self.skip_auto.isChecked() else self.skip_rows.value()
+        if not include_columns:
+            return ImportOverrides(sep=sep, decimal=decimal, header_row=header_row)
+        return ImportOverrides(
+            sep=sep,
+            decimal=decimal,
+            header_row=header_row,
+            income_column=self.inflow_box.currentText() or None,
+            expenses_column=self.outflow_box.currentText() or None,
+            text_columns=tuple(self.selected_text_columns()),
+            date_column=self.analysis.settings.date_column if self.analysis else None,
+        )
+
+    def _analyze(self, include_columns: bool) -> bool:
+        assert self.csv_bytes is not None
+        try:
+            self.analysis = analyze_month(
+                self.csv_bytes,
+                self.rules,
+                self._overrides(include_columns),
+                categories=self._category_names(),
+                minimum_amount=float(self.min_amount.value()),
+            )
+        except UnreadableCsvError as exc:
+            QMessageBox.critical(self, "CSV error", f"Could not read the CSV:\n{exc}")
+            return False
+        return True
 
     def open_csv(self) -> None:
         file_name, _ = QFileDialog.getOpenFileName(self, "Open transactions CSV", "", "CSV Files (*.csv);;All Files (*)")
@@ -650,39 +680,36 @@ class FinSightWindow(QMainWindow):
         if self.current_csv is None:
             return
         try:
-            self.df = read_csv_file(self.current_csv, self._read_options())
-        except Exception as exc:
+            self.csv_bytes = self.current_csv.read_bytes()
+        except OSError as exc:
             QMessageBox.critical(self, "CSV error", f"Could not read the CSV:\n{exc}")
+            return
+        if not self._analyze(include_columns=False):
             return
         self.file_label.setText(str(self.source_csv or self.current_csv))
         self.uploaded_file_label.setText(str(self.current_csv))
         self.populate_columns()
         self.populate_preview()
         self._set_ready_state(True)
-        self.refresh_plot()
+        self.render_analysis()
 
     def populate_columns(self) -> None:
-        if self.df is None:
+        if self.analysis is None:
             return
-        columns = [str(c) for c in self.df.columns]
+        columns = list(self.analysis.columns)
+        settings = self.analysis.settings
         self.inflow_box.clear()
         self.outflow_box.clear()
-        self.inflow_box.addItems(columns)
-        self.outflow_box.addItems(columns)
+        self.inflow_box.addItems([""] + columns)
+        self.outflow_box.addItems([""] + columns)
+        self.inflow_box.setCurrentText(settings.income_column or "")
+        self.outflow_box.setCurrentText(settings.expenses_column or "")
 
-        inflow = guess_inflow_column(self.df) or (columns[0] if columns else "")
-        outflow = guess_outflow_column(self.df) or (columns[0] if columns else "")
-        if inflow in columns:
-            self.inflow_box.setCurrentText(inflow)
-        if outflow in columns:
-            self.outflow_box.setCurrentText(outflow)
-
-        guessed_text = set(guess_text_columns(self.df))
         self.text_table.setRowCount(len(columns))
         for row, column in enumerate(columns):
             check = QTableWidgetItem()
             check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-            check.setCheckState(Qt.Checked if column in guessed_text else Qt.Unchecked)
+            check.setCheckState(Qt.Checked if column in settings.text_columns else Qt.Unchecked)
             self.text_table.setItem(row, 0, check)
             self.text_table.setItem(row, 1, QTableWidgetItem(column))
         self.text_table.resizeColumnsToContents()
@@ -696,43 +723,36 @@ class FinSightWindow(QMainWindow):
                 columns.append(name.text())
         return columns
 
-    def filtered_df(self) -> pd.DataFrame:
-        assert self.df is not None
-        df = self.df.copy()
-        if self.min_amount.value() <= 0:
-            return df
-        inflow = parse_amount_series(df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
-        outflow = parse_amount_series(df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
-        return df[(inflow + outflow) >= self.min_amount.value()]
-
     def refresh_plot(self) -> None:
-        if self.df is None:
+        """Re-analyze with the current Rules and Settings, then redraw every page."""
+        if self.csv_bytes is None:
             return
-        try:
-            df = self.filtered_df()
-            text_cols = self.selected_text_columns()
-            text_series = combine_text_columns(df, text_cols) if text_cols else None
-            fig, summary = build_finsight_flow(
-                df,
-                self.inflow_box.currentText(),
-                self.outflow_box.currentText(),
-                text_series,
-                self.rules,
-                title=(self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "FinSight",
-                decimal_override=self.decimal_box.currentText(),
+        if self._analyze(include_columns=True):
+            self.render_analysis()
+
+    def render_analysis(self) -> None:
+        analysis = self.analysis
+        if analysis is None:
+            return
+        if analysis.columns_need_checking:
+            self.current_fig = None
+            QMessageBox.warning(
+                self,
+                "Check your columns",
+                "FinSight could not find the Income, Expenses and text columns in this file.\n"
+                "Choose them in Settings, then press Apply settings.",
             )
-        except Exception as exc:
-            QMessageBox.critical(self, "Plot error", f"Could not build the FinSight plot:\n{exc}")
+            self.show_page(SETTINGS_PAGE)
             return
 
-        self.current_fig = fig
-        self.current_summary = summary
+        title = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else None
+        self.current_fig = money_flow_figure(analysis, title=title)
         if QWebEngineView is None:
-            self.web_view.setText("Plot built. Open the interactive preview or save it to your data folder.")
+            self.web_view.setText("Money flow built. Open the interactive preview or save it to your data folder.")
         else:
-            self._load_plotly_preview(self.web_view, "finsight_flow_preview.html", fig)
+            self._load_plotly_preview(self.web_view, "finsight_flow_preview.html", self.current_fig)
         self.refresh_uncategorized()
-        self.refresh_dashboard(df)
+        self.refresh_dashboard()
 
     def open_preview_external(self) -> None:
         if self.current_fig is None:
@@ -741,177 +761,80 @@ class FinSightWindow(QMainWindow):
         self.current_fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
-    def _date_column(self) -> str | None:
-        if self.df is None:
-            return None
-        keys = ["buchungsdatum", "abschlussdatum", "valutadatum", "date", "datum"]
-        for column in self.df.columns:
-            lc = str(column).lower()
-            if any(key in lc for key in keys):
-                return str(column)
-        return None
-
     @staticmethod
-    def _parse_date_series(series: pd.Series) -> pd.Series:
-        sample = series.dropna().astype(str).head(20)
-        dayfirst = sample.str.contains(r"\d{1,2}\.\d{1,2}\.\d{2,4}", regex=True).any()
-        return pd.to_datetime(series, errors="coerce", dayfirst=bool(dayfirst))
-
-    @staticmethod
-    def _period_text(dates: pd.Series) -> tuple[str, str]:
-        valid = dates.dropna()
-        if valid.empty:
+    def _period_text(analysis: MonthAnalysis) -> tuple[str, str]:
+        start, end = analysis.start_date, analysis.end_date
+        if start is None or end is None:
             return "No dates", "Date column not detected"
-        start = valid.min()
-        end = valid.max()
-        days = max(1, int((end.normalize() - start.normalize()).days) + 1)
-        value = f"{start:%d.%m.%Y} - {end:%d.%m.%Y}"
-        label = "1 day" if days == 1 else f"{days} days"
-        return value, label
-
-    def _match_rule(self, text: str) -> tuple[str, str]:
-        text = str(text or "")
-        for rule in self.rules:
-            pattern = (rule.get("pattern") or "").strip()
-            if not pattern:
-                continue
-            try:
-                if re.search(pattern, text, flags=re.IGNORECASE):
-                    category = (rule.get("category") or "").strip() or "Other"
-                    merchant = (rule.get("merchant") or "").strip()
-                    return category, merchant
-            except re.error:
-                continue
-        return "Other", ""
+        days = (end - start).days + 1
+        return analysis.month_label, f"{start:%d.%m.%Y} - {end:%d.%m.%Y} ({'1 day' if days == 1 else f'{days} days'})"
 
     def _category_names(self) -> list[str]:
-        return sorted(c for c in self.categories if c and c != "Other")
+        return sorted({c for c in self.categories if c} | {OTHER})
 
-    def _suggest_category(self, merchant: str, text: str) -> str:
-        sample = f"{merchant} {text}".lower()
-        hints = [
-            ("Groceries", ["supermarket", "grocery", "market"]),
-            ("Food & Drink", ["restaurant", "cafe", "bar", "pizza", "kebab", "mcdonald", "burger", "bakery"]),
-            ("Transport", ["rail", "bus", "train", "ticket", "uber", "taxi"]),
-            ("Shopping", ["shop", "store", "amazon", "aliexpress", "ikea"]),
-            ("Subscriptions", ["apple.com/bill", "spotify", "netflix", "subscription"]),
-            ("Telecom", ["telecom", "mobile", "wireless"]),
-            ("Health", ["pharmacy", "doctor", "hospital", "clinic"]),
-            ("P2P", ["paypal"]),
-        ]
-        existing = set(self._category_names())
-        for category, keywords in hints:
-            if category in existing and any(keyword in sample for keyword in keywords):
-                return category
-
-        merchant_tokens = set(re.findall(r"[a-z0-9]{4,}", merchant.lower()))
-        best_category = ""
-        best_score = 0
-        for category in existing:
-            category_tokens = set(re.findall(r"[a-z0-9]{4,}", category.lower()))
-            score = len(merchant_tokens & category_tokens)
-            if score > best_score:
-                best_category = category
-                best_score = score
-        if best_category:
-            return best_category
-
-        return ""
-
-    def _categorized_text_frame(self, df: pd.DataFrame) -> pd.DataFrame:
-        text_cols = self.selected_text_columns()
-        combined = combine_text_columns(df, text_cols)
-        categories: list[str] = []
-        merchants: list[str] = []
-        suggestions: list[str] = []
-        for text in combined.astype(str):
-            category, merchant_alias = self._match_rule(text)
-            merchant = merchant_alias or self._merchant_from_text(text)
-            suggestion = category if category != "Other" else self._suggest_category(merchant, text)
-            categories.append(category)
-            merchants.append(merchant)
-            suggestions.append(suggestion)
+    def _transactions_frame(self) -> pd.DataFrame:
+        assert self.analysis is not None
         return pd.DataFrame(
-            {"Text": combined, "Category": categories, "Merchant": merchants, "Suggested Category": suggestions},
-            index=df.index,
+            [
+                {
+                    "Date": pd.Timestamp(t.date) if t.date else pd.NaT,
+                    "Merchant": t.merchant,
+                    "Category": t.category,
+                    "Income": t.income,
+                    "Expenses": t.expenses,
+                    "Saved": t.income - t.expenses,
+                }
+                for t in self.analysis.transactions
+            ],
+            columns=["Date", "Merchant", "Category", "Income", "Expenses", "Saved"],
         )
 
-    def dashboard_frame(self, df: pd.DataFrame) -> pd.DataFrame:
-        matched = self._categorized_text_frame(df)
-        inflow = parse_amount_series(df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
-        outflow = parse_amount_series(df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
-
-        date_col = self._date_column()
-        if date_col and date_col in df.columns:
-            dates = self._parse_date_series(df[date_col])
-        else:
-            dates = pd.Series(pd.NaT, index=df.index)
-
-        matched = matched.copy()
-        matched["Income"] = inflow
-        matched["Expenses"] = outflow
-        matched["Net"] = inflow - outflow
-        matched["Date"] = dates
-        return matched
-
-    @staticmethod
-    def _merchant_from_text(text: str) -> str:
-        text = str(text or "").strip()
-        if not text:
-            return "Unknown"
-        first = re.split(r"[;|]", text, maxsplit=1)[0].strip()
-        first = re.sub(r"\s+", " ", first)
-        return first[:80] if first else text[:80]
-
-    def refresh_dashboard(self, df: pd.DataFrame | None = None) -> None:
-        if self.df is None:
+    def refresh_dashboard(self) -> None:
+        analysis = self.analysis
+        if analysis is None:
             return
-        if df is None:
-            df = self.filtered_df()
-
-        dashboard = self.dashboard_frame(df)
-        income = float(dashboard["Income"].sum())
-        expenses = float(dashboard["Expenses"].sum())
-        net = income - expenses
-        self.total_outflow_metric.value_label.setText(f"CHF {expenses:,.2f}")  # type: ignore[attr-defined]
-        self.total_inflow_metric.value_label.setText(f"CHF {income:,.2f}")  # type: ignore[attr-defined]
-        self.total_saved_metric.value_label.setText(f"CHF {net:,.2f}")  # type: ignore[attr-defined]
-        period_value, period_label = self._period_text(dashboard["Date"])
+        self.total_outflow_metric.value_label.setText(f"CHF {analysis.expenses:,.2f}")  # type: ignore[attr-defined]
+        self.total_inflow_metric.value_label.setText(f"CHF {analysis.income:,.2f}")  # type: ignore[attr-defined]
+        saved = analysis.saved
+        self.total_saved_metric.value_label.setText(  # type: ignore[attr-defined]
+            f"{'-' if saved < 0 else ''}CHF {abs(saved):,.2f}"
+        )
+        self.total_saved_metric.value_label.setStyleSheet(  # type: ignore[attr-defined]
+            "color: #dc2626;" if saved < 0 else ""
+        )
+        period_value, period_label = self._period_text(analysis)
         self.period_metric.value_label.setText(period_value)  # type: ignore[attr-defined]
         self.period_metric.label_label.setText(period_label)  # type: ignore[attr-defined]
 
-        self._refresh_category_breakdown(dashboard)
-        self._refresh_top_merchants(dashboard)
-        self._refresh_timeline(dashboard)
+        transactions = self._transactions_frame()
+        self._refresh_category_breakdown(analysis)
+        self._refresh_top_merchants(transactions)
+        self._refresh_timeline(transactions)
 
-    def _refresh_category_breakdown(self, dashboard: pd.DataFrame) -> None:
-        category_totals = (
-            dashboard.groupby("Category", dropna=False)[["Income", "Expenses", "Net"]]
-            .sum()
-            .sort_values("Expenses", ascending=False)
-        )
-        display = category_totals.head(12).copy()
-        self.category_table.setRowCount(len(display))
-        for row, (category, values) in enumerate(display.iterrows()):
-            self.category_table.setItem(row, 0, QTableWidgetItem(str(category)))
-            self.category_table.setItem(row, 1, QTableWidgetItem(f"CHF {float(values['Income']):,.2f}"))
-            self.category_table.setItem(row, 2, QTableWidgetItem(f"CHF {float(values['Expenses']):,.2f}"))
-            self.category_table.setItem(row, 3, QTableWidgetItem(f"CHF {float(values['Net']):,.2f}"))
+    def _refresh_category_breakdown(self, analysis: MonthAnalysis) -> None:
+        categories = sorted(analysis.categories, key=lambda c: -c.expenses)
+        self.category_table.setRowCount(len(categories))
+        for row, total in enumerate(categories):
+            share = total.expenses / analysis.expenses * 100 if analysis.expenses else 0.0
+            self.category_table.setItem(row, 0, QTableWidgetItem(total.category))
+            self.category_table.setItem(row, 1, QTableWidgetItem(f"CHF {total.income:,.2f}"))
+            self.category_table.setItem(row, 2, QTableWidgetItem(f"CHF {total.expenses:,.2f}"))
+            self.category_table.setItem(row, 3, QTableWidgetItem(f"{share:.1f}%"))
         self.category_table.resizeColumnsToContents()
         self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
-        spend = display[display["Expenses"] > 0].sort_values("Expenses", ascending=True)
+        spend = [c for c in reversed(categories) if c.expenses > 0]
         fig = go.Figure(
             go.Bar(
-                x=spend["Expenses"],
-                y=spend.index.astype(str),
+                x=[c.expenses for c in spend],
+                y=[c.category for c in spend],
                 orientation="h",
                 marker_color="#2563eb",
                 hovertemplate="%{y}<br>CHF %{x:,.2f}<extra></extra>",
             )
         )
         fig.update_layout(
-            title="Spending by Category",
+            title="Expenses by Category",
             paper_bgcolor="#ffffff",
             plot_bgcolor="#ffffff",
             font=dict(family="Inter, Segoe UI, Arial", size=12),
@@ -925,9 +848,9 @@ class FinSightWindow(QMainWindow):
         else:
             self._load_plotly_preview(self.category_view, "category_breakdown.html", fig)
 
-    def _refresh_top_merchants(self, dashboard: pd.DataFrame) -> None:
+    def _refresh_top_merchants(self, transactions: pd.DataFrame) -> None:
         merchants = (
-            dashboard[dashboard["Expenses"] > 0]
+            transactions[transactions["Expenses"] > 0]
             .groupby("Merchant", dropna=False)
             .agg(Spent=("Expenses", "sum"), Transactions=("Expenses", "count"))
             .sort_values("Spent", ascending=False)
@@ -941,25 +864,25 @@ class FinSightWindow(QMainWindow):
         self.top_merchants_table.resizeColumnsToContents()
         self.top_merchants_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
-    def _refresh_timeline(self, dashboard: pd.DataFrame) -> None:
-        dated = dashboard.dropna(subset=["Date"]).copy()
+    def _refresh_timeline(self, transactions: pd.DataFrame) -> None:
+        dated = transactions.dropna(subset=["Date"]).copy()
         if dated.empty:
-            ordered = dashboard.reset_index(drop=True).copy()
+            ordered = transactions.reset_index(drop=True).copy()
             ordered["Step"] = ordered.index + 1
-            ordered["Cumulative Net"] = ordered["Net"].cumsum()
+            ordered["Cumulative Saved"] = ordered["Saved"].cumsum()
             fig = go.Figure(
                 go.Scatter(
                     x=ordered["Step"],
-                    y=ordered["Cumulative Net"],
+                    y=ordered["Cumulative Saved"],
                     mode="lines+markers",
                     line=dict(color="#0f172a", width=3),
                     hovertemplate="Transaction %{x}<br>CHF %{y:,.2f}<extra></extra>",
                 )
             )
-            fig.update_layout(xaxis_title="Transaction", title="Cumulative Net Flow")
+            fig.update_layout(xaxis_title="Transaction", title="Cumulative Saved")
         else:
-            daily = dated.groupby(dated["Date"].dt.date)[["Income", "Expenses", "Net"]].sum().sort_index()
-            daily["Cumulative Net"] = daily["Net"].cumsum()
+            daily = dated.groupby(dated["Date"].dt.date)[["Income", "Expenses", "Saved"]].sum().sort_index()
+            daily["Cumulative Saved"] = daily["Saved"].cumsum()
             fig = go.Figure()
             fig.add_bar(
                 x=daily.index,
@@ -978,13 +901,13 @@ class FinSightWindow(QMainWindow):
             )
             fig.add_scatter(
                 x=daily.index,
-                y=daily["Cumulative Net"],
-                name="Cumulative net",
+                y=daily["Cumulative Saved"],
+                name="Cumulative Saved",
                 mode="lines+markers",
                 line=dict(color="#0f172a", width=3),
-                hovertemplate="Cumulative net<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
+                hovertemplate="Cumulative Saved<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
             )
-            fig.update_layout(xaxis_title="Date", title="Daily Flow")
+            fig.update_layout(xaxis_title="Date", title="Daily Income and Expenses")
 
         fig.update_layout(
             barmode="relative",
@@ -1002,9 +925,9 @@ class FinSightWindow(QMainWindow):
             self._load_plotly_preview(self.timeline_view, "daily_finsight.html", fig)
 
     def populate_preview(self) -> None:
-        if self.df is None:
+        if self.analysis is None:
             return
-        preview = self.df.head(200)
+        preview = self.analysis.table.head(200)
         self.preview_table.setRowCount(len(preview))
         self.preview_table.setColumnCount(len(preview.columns))
         self.preview_table.setHorizontalHeaderLabels([str(c) for c in preview.columns])
@@ -1013,52 +936,24 @@ class FinSightWindow(QMainWindow):
                 self.preview_table.setItem(r, c, QTableWidgetItem("" if pd.isna(value) else str(value)))
         self.preview_table.resizeColumnsToContents()
 
-    def categorized_frame(self) -> pd.DataFrame:
-        assert self.df is not None
-        categorized = self._categorized_text_frame(self.df)
-        amount = pd.Series(0.0, index=self.df.index)
-        if self.inflow_box.currentText() and self.outflow_box.currentText():
-            inc = parse_amount_series(self.df[self.inflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0)
-            out = parse_amount_series(self.df[self.outflow_box.currentText()], self.decimal_box.currentText()).fillna(0.0).abs()
-            amount = out.where(out > 0, inc)
-        categorized = categorized.copy()
-        categorized["Amount"] = amount
-        return categorized
-
     def refresh_uncategorized(self) -> None:
-        if self.df is None:
+        if self.analysis is None:
             return
-        categorized = self.categorized_frame()
-        other = categorized[categorized["Category"] == "Other"].copy()
-        search = self.search_box.text().strip()
-        if search:
-            haystack = (
-                other["Text"].astype(str) + " " +
-                other["Merchant"].astype(str) + " " +
-                other["Suggested Category"].astype(str)
-            )
-            other = other[haystack.str.contains(search, case=False, na=False, regex=False)]
-
-        grouped = (
-            other.groupby(["Merchant", "Suggested Category"], dropna=False)
-            .agg(Rows=("Text", "count"), Example=("Text", "first"), Total=("Amount", "sum"))
-            .sort_values(["Total", "Rows"], ascending=[False, False])
-        )
-
-        self.uncat_table.setRowCount(len(grouped))
-        for row, ((merchant, suggestion), values) in enumerate(grouped.iterrows()):
-            payload = {
-                "merchant": str(merchant),
-                "suggestion": str(suggestion),
-                "example": str(values["Example"]),
-            }
-            rows_item = QTableWidgetItem(str(int(values["Rows"])))
-            rows_item.setData(Qt.UserRole, payload)
+        search = self.search_box.text().strip().lower()
+        merchants = [
+            m
+            for m in self.analysis.review_merchants
+            if not search or search in f"{m.merchant} {m.example} {m.suggested_category}".lower()
+        ]
+        self.uncat_table.setRowCount(len(merchants))
+        for row, merchant in enumerate(merchants):
+            rows_item = QTableWidgetItem(str(merchant.count))
+            rows_item.setData(Qt.UserRole, {"merchant": merchant.merchant, "suggestion": merchant.suggested_category})
             self.uncat_table.setItem(row, 0, rows_item)
-            self.uncat_table.setItem(row, 1, QTableWidgetItem(str(merchant)))
-            self.uncat_table.setItem(row, 2, QTableWidgetItem(str(suggestion)))
-            self.uncat_table.setItem(row, 3, QTableWidgetItem(str(values["Example"])))
-            self.uncat_table.setItem(row, 4, QTableWidgetItem(f"{float(values['Total']):,.2f}"))
+            self.uncat_table.setItem(row, 1, QTableWidgetItem(merchant.merchant))
+            self.uncat_table.setItem(row, 2, QTableWidgetItem(merchant.suggested_category))
+            self.uncat_table.setItem(row, 3, QTableWidgetItem(merchant.example))
+            self.uncat_table.setItem(row, 4, QTableWidgetItem(f"{merchant.total:,.2f}"))
         self.uncat_table.resizeColumnsToContents()
         self.uncat_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
 
@@ -1066,22 +961,16 @@ class FinSightWindow(QMainWindow):
         selected = self.uncat_table.selectedItems()
         if not selected:
             return
-        row = selected[0].row()
-        rows_item = self.uncat_table.item(row, 0)
+        rows_item = self.uncat_table.item(selected[0].row(), 0)
         payload = rows_item.data(Qt.UserRole) if rows_item else None
         if not isinstance(payload, dict):
             return
         merchant = str(payload.get("merchant", "")).strip()
         suggestion = str(payload.get("suggestion", "")).strip()
-        example = str(payload.get("example", "")).strip()
-        if merchant and merchant != "Unknown":
-            self.new_pattern.setText(re.escape(merchant))
+        if merchant:
+            self.new_pattern.setText(rule_for_merchant(merchant, suggestion)["pattern"])
             self.new_merchant.setText(merchant)
-        else:
-            words = re.findall(r"[\w./-]{4,}", example, flags=re.UNICODE)
-            self.new_pattern.setText(re.escape(words[0]) if words else re.escape(example[:80]))
-            self.new_merchant.clear()
-        if suggestion and suggestion != "Other":
+        if suggestion:
             self._select_category(suggestion)
 
     def add_rule_from_fields(self) -> None:

@@ -41,21 +41,21 @@ installed to run.
 1. **Import** — pick a CSV via the file picker; it's copied into
    `imports/` in your data folder for local reuse and re-analysis without
    re-picking the file.
-2. **Parse** — `finsight_core.py` sniffs the separator, encoding, and how
-   many header/description rows to skip, then loads it into a DataFrame.
-   Inflow/outflow and text columns are guessed from common header names but
-   can be overridden.
-3. **Categorize** — each transaction's combined text columns are matched
-   against a local list of regex rules (`rules.json` in your data folder,
-   starting from a small generic starter set). Matches assign a category
-   and, optionally, a normalized merchant name. Unmatched transactions land
-   in a review tab where you can categorize them and save the match as a new
-   rule for next time.
-4. **Visualize** — the Dashboard tab shows KPI cards (inflow/outflow/net),
-   category spending, top merchants, and a daily flow chart. The Chart tab
-   builds a Sankey diagram: income categories flow into a "Cash flow hub"
-   node, which flows out into expense categories, each node/link labeled
-   with its amount and share of the total.
+2. **Analyze a month** — `month_analysis.analyze_month` is the one pure
+   entry point (CSV bytes + Rules + optional import overrides in, a
+   `MonthAnalysis` out). It sniffs the encoding, delimiter, decimal mark and
+   header row, guesses the Income, Expenses and text columns (overridable in
+   Settings), and returns "columns need checking" when it can't find them.
+3. **Categorize** — inside the same call, each transaction's text is matched
+   against the Rules (`rules.json` in your data folder). A match assigns a
+   Category and, optionally, a Merchant name. Transactions no Rule matches are
+   **Uncategorized** (Other is an ordinary Category you pick on purpose) and
+   are grouped by Merchant for Review, where saving a Rule files them next time.
+4. **Visualize** — the Dashboard (Income, Expenses, Saved, the Category
+   table, top Merchants, daily flow) and the Money flow are all drawn from the
+   same `MonthAnalysis`, so their numbers always agree. In the Money flow,
+   Income Categories flow into the month, which flows out into Expense
+   Categories and Saved.
 5. **Export** — save the current Money flow as HTML to `money-flow/` in your
    data folder.
 
