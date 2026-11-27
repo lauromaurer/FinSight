@@ -15,6 +15,7 @@ fi
   --name "FinSight" \
   --icon "assets/logo.icns" \
   --add-data "assets:assets" \
+  --paths src \
   --add-data "default_categories.json:." \
   src/finsight/desktop_app.py
 

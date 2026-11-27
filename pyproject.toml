@@ -1,0 +1,13 @@
+[project]
+name = "finsight"
+version = "1.0.0"
+description = "Turn one month of bank transactions into a categorized view of where the money went."
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-ra"

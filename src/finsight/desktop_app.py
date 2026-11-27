@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 from datetime import datetime
+import os
 import re
 import shutil
 import sys
 from pathlib import Path
+
+if __package__ in (None, ""):
+    # Launched as a script (`python src/finsight/desktop_app.py`, PyInstaller
+    # entry point): put `src/` on the path so the package import below works.
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -40,8 +46,10 @@ try:
 except Exception:  # pragma: no cover - import depends on installed Qt modules
     QWebEngineView = None
 
-from finsight_core import (
+from finsight.finsight_core import (
     APP_NAME,
+    BUNDLE_DIR,
+    DEFAULT_CATEGORIES_PATH,
     CsvReadOptions,
     PLOTS_DIR,
     UPLOADS_DIR,
@@ -63,8 +71,7 @@ from finsight_core import (
 PREVIEW_DIR = Path(".preview")
 
 def resource_path(relative_path: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path.cwd()))
-    return base / relative_path
+    return BUNDLE_DIR / relative_path
 
 LOGO_PATH = resource_path("assets/logo.svg")
 
@@ -1194,8 +1201,38 @@ class FinSightWindow(QMainWindow):
         QMessageBox.information(self, "Plot saved", f"Interactive HTML: {html_path}{png_note}")
 
 
-def main() -> int:
-    app = QApplication(sys.argv)
+SELF_CHECK_FLAG = "--self-check"
+
+
+def _report(message: str, stream) -> None:
+    # A windowed frozen build on Windows has no console: stdout/stderr are None.
+    if stream is not None:
+        print(message, file=stream)
+
+
+def self_check() -> int:
+    """Start without a window: core modules loaded, bundled files present, Qt up.
+
+    Returns the process exit code: 0 on success, 1 on failure.
+    """
+    try:
+        missing = [str(path) for path in (LOGO_PATH, DEFAULT_CATEGORIES_PATH) if not path.exists()]
+        if missing:
+            raise FileNotFoundError(f"bundled files missing: {', '.join(missing)}")
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        QApplication.instance() or QApplication([sys.argv[0]])
+    except Exception as exc:
+        _report(f"FinSight self-check FAILED: {exc!r}", sys.stderr)
+        return 1
+    _report("FinSight self-check OK", sys.stdout)
+    return 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv if argv is None else argv
+    if SELF_CHECK_FLAG in argv[1:]:
+        return self_check()
+    app = QApplication(argv)
     if LOGO_PATH.exists():
         app.setWindowIcon(QIcon(load_logo_pixmap(256)))
     app.setStyleSheet(STYLE)

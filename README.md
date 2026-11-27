@@ -65,8 +65,22 @@ installed to run.
 python -m venv .venv
 source .venv/bin/activate      # .\.venv\Scripts\Activate.ps1 on Windows
 pip install -r requirements.txt
-python src/finsight/desktop_app.py
+python src/finsight/desktop_app.py   # works from any folder
 ```
+
+`python src/finsight/desktop_app.py --self-check` starts the app without a
+window, checks that the core modules and bundled files load, and exits 0 on
+success (non-zero on failure).
+
+### Running the tests
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+```
+
+CI runs the tests on Windows and macOS on every push and pull request
+(`.github/workflows/tests.yml`).
 
 If your Python/Qt install has WebEngine available, the Plotly chart renders
 inside the app. Otherwise, use the **Open interactive preview** button — it
@@ -104,10 +118,12 @@ bundled `_internal` files next to it.
 ```
 FinSight/
 ├── src/finsight/
+│   ├── __main__.py        # `python -m finsight`
 │   ├── desktop_app.py     # PySide6 GUI
 │   └── finsight_core.py   # CSV parsing, categorization, flow generation
 ├── assets/                 # app logo/icon (svg, ico, icns)
 ├── default_categories.json # starter category labels bundled into releases
+├── tests/                  # pytest suite
 ├── FinSight.spec            # PyInstaller build spec
 ├── build_mac.sh / build_exe.bat
 └── config/, generated Plots/, uploaded CSV files/   # created on first run

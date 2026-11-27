@@ -17,7 +17,9 @@ APP_DIR = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False)
 CONFIG_DIR = APP_DIR / "config"
 RULES_PATH = CONFIG_DIR / "rules.json"
 CATEGORIES_PATH = CONFIG_DIR / "categories.json"
-BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", APP_DIR))
+# Read-only files shipped with the app (assets/, default_categories.json):
+# the PyInstaller bundle when frozen, else the repository root. Never the cwd.
+BUNDLE_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parents[2]))
 DEFAULT_CATEGORIES_PATH = BUNDLE_DIR / "default_categories.json"
 PLOTS_DIR = APP_DIR / "generated Plots"
 UPLOADS_DIR = APP_DIR / "uploaded CSV files"
