@@ -222,3 +222,41 @@ def test_the_month_date_range_comes_from_the_transaction_dates():
     analysis = german_month()
 
     assert (str(analysis.start_date), str(analysis.end_date)) == ("2026-10-01", "2026-10-28")
+
+
+def test_clicking_a_category_lists_exactly_its_transactions():
+    analysis = german_month()
+
+    groceries = analysis.transactions_in("Groceries")
+
+    assert [(str(t.date), t.merchant, t.expenses) for t in groceries] == [
+        ("2026-10-02", "Migros Supermarkt", 84.35),
+        ("2026-10-05", "Migros Supermarkt", 42.10),
+    ]
+    assert analysis.transactions_in("No such Category") == ()
+
+
+def test_the_uncategorized_slice_can_be_drilled_into_like_any_category():
+    analysis = german_month()
+
+    uncategorized = analysis.transactions_in("Uncategorized")
+
+    assert [t.merchant for t in uncategorized] == ["Example Immobilien AG", "Bank Fee", "Café Central *Bern"]
+    assert sum(t.expenses for t in uncategorized) == pytest.approx(1462.50)
+
+
+def test_each_category_carries_its_share_of_expenses():
+    analysis = german_month()
+
+    shares = {c.category: round(c.expense_share * 100, 1) for c in analysis.categories}
+
+    assert shares["Uncategorized"] == 86.2  # 1462.50 / 1696.25
+    assert shares["Groceries"] == 7.5  # 126.45 / 1696.25
+    assert shares["Salary"] == 0.0
+    assert sum(c.expense_share for c in analysis.categories) == pytest.approx(1.0)
+
+
+def test_share_of_expenses_is_zero_when_a_month_has_no_expenses():
+    analysis = german_month(rules=RULES, minimum_amount=5000)
+
+    assert [(c.category, c.expense_share) for c in analysis.categories] == [("Salary", 0.0)]

@@ -73,6 +73,8 @@ class CategoryTotal:
     category: str
     income: float
     expenses: float
+    # This Category's fraction (0..1) of the month's Expenses; 0 when there are none.
+    expense_share: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -135,6 +137,10 @@ class MonthAnalysis:
     @property
     def columns_need_checking(self) -> bool:
         return self.column_check is not None
+
+    def transactions_in(self, category: str) -> tuple[Transaction, ...]:
+        """The transactions filed under one Category, in file order (the Category table's drill-down)."""
+        return tuple(t for t in self.transactions if t.category == category)
 
 
 # --- Reading the CSV -------------------------------------------------------
@@ -339,7 +345,11 @@ def _category_totals(transactions: list[Transaction]) -> tuple[CategoryTotal, ..
         income_expenses[0] += t.income
         income_expenses[1] += t.expenses
     ordered = sorted(totals.items(), key=lambda item: (-(item[1][0] + item[1][1]), item[0]))
-    return tuple(CategoryTotal(name, income, expenses) for name, (income, expenses) in ordered)
+    all_expenses = sum(expenses for _, expenses in totals.values())
+    return tuple(
+        CategoryTotal(name, income, expenses, expenses / all_expenses if all_expenses else 0.0)
+        for name, (income, expenses) in ordered
+    )
 
 
 _MONTH_NAMES = [

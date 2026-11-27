@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGridLayout,
@@ -124,6 +125,11 @@ QLabel#Subtitle {
 QLabel#Logo {
     background: transparent;
 }
+QLabel#MonthHeader {
+    font-size: 24px;
+    font-weight: 700;
+    color: #0f172a;
+}
 QLabel#MetricValue {
     font-size: 22px;
     font-weight: 700;
@@ -209,7 +215,12 @@ QHeaderView::section {
 """
 
 
-SETTINGS_PAGE = 5
+SETTINGS_PAGE = 4
+
+
+def _chf(amount: float) -> str:
+    """CHF amount with a leading minus when negative, e.g. "-CHF 19.50"."""
+    return f"{'-' if amount < 0 else ''}CHF {abs(amount):,.2f}"
 
 
 class FinSightWindow(QMainWindow):
@@ -264,7 +275,7 @@ class FinSightWindow(QMainWindow):
         self.nav_group = QButtonGroup(side)
         self.nav_group.setExclusive(True)
         self.nav_buttons = []
-        for index, label in enumerate(["Dashboard", "Plot", "Categorize", "Rules", "Data", "Settings"]):
+        for index, label in enumerate(["Dashboard", "Categorize", "Rules", "Data", "Settings"]):
             button = QPushButton(label)
             button.setObjectName("NavButton")
             button.setCheckable(True)
@@ -285,13 +296,11 @@ class FinSightWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.tabBar().hide()
         self.dashboard_tab = QWidget()
-        self.chart_tab = QWidget()
         self.categorize_tab = QWidget()
         self.rules_tab = QWidget()
         self.data_tab = QWidget()
         self.settings_tab = QWidget()
         self.tabs.addTab(self.dashboard_tab, "Dashboard")
-        self.tabs.addTab(self.chart_tab, "Plot")
         self.tabs.addTab(self.categorize_tab, "Categorize")
         self.tabs.addTab(self.rules_tab, "Rules")
         self.tabs.addTab(self.data_tab, "Data")
@@ -300,7 +309,6 @@ class FinSightWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.sync_sidebar_navigation)
 
         self._build_dashboard_tab()
-        self._build_chart_tab()
         self._build_categorize_tab()
         self._build_rules_tab()
         self._build_data_tab()
@@ -335,73 +343,49 @@ class FinSightWindow(QMainWindow):
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(10)
 
+        header = QHBoxLayout()
+        self.month_header = QLabel("No month imported")
+        self.month_header.setObjectName("MonthHeader")
+        header.addWidget(self.month_header, stretch=1)
+        self.export_money_flow_button = QPushButton("Export Money flow")
+        self.export_money_flow_button.setObjectName("Secondary")
+        self.export_money_flow_button.clicked.connect(self.export_money_flow)
+        header.addWidget(self.export_money_flow_button)
+        layout.addLayout(header)
+
         metrics = QHBoxLayout()
-        self.total_outflow_metric = self._metric_card("Expenses", "CHF 0.00")
         self.total_inflow_metric = self._metric_card("Income", "CHF 0.00")
+        self.total_outflow_metric = self._metric_card("Expenses", "CHF 0.00")
         self.total_saved_metric = self._metric_card("Saved", "CHF 0.00")
-        self.period_metric = self._metric_card("Month", "No dates")
-        metrics.addWidget(self.total_outflow_metric)
         metrics.addWidget(self.total_inflow_metric)
+        metrics.addWidget(self.total_outflow_metric)
         metrics.addWidget(self.total_saved_metric)
-        metrics.addWidget(self.period_metric)
         layout.addLayout(metrics)
 
-        charts = QHBoxLayout()
         if QWebEngineView is None:
-            self.category_view = QLabel("Category chart requires Qt WebEngine.")
-            self.timeline_view = QLabel("Timeline chart requires Qt WebEngine.")
-            self.category_view.setAlignment(Qt.AlignCenter)
-            self.timeline_view.setAlignment(Qt.AlignCenter)
+            fallback = QWidget()
+            fallback_layout = QVBoxLayout(fallback)
+            fallback_layout.setAlignment(Qt.AlignCenter)
+            self.web_view = QLabel("The Money flow opens in your browser.")
+            self.web_view.setAlignment(Qt.AlignCenter)
+            self.external_preview_button = QPushButton("Open Money flow")
+            self.external_preview_button.clicked.connect(self.open_preview_external)
+            fallback_layout.addWidget(self.web_view)
+            fallback_layout.addWidget(self.external_preview_button, alignment=Qt.AlignCenter)
+            layout.addWidget(fallback, stretch=3)
         else:
-            self.category_view = QWebEngineView()
-            self.timeline_view = QWebEngineView()
-        charts.addWidget(self.category_view, stretch=1)
-        charts.addWidget(self.timeline_view, stretch=1)
-        layout.addLayout(charts, stretch=2)
-
-        tables = QHBoxLayout()
-        self.top_merchants_table = QTableWidget(0, 3)
-        self.top_merchants_table.setHorizontalHeaderLabels(["Merchant", "Spent", "Transactions"])
-        self.top_merchants_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.top_merchants_table.setAlternatingRowColors(True)
-        self.top_merchants_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            self.web_view = QWebEngineView()
+            layout.addWidget(self.web_view, stretch=3)
 
         self.category_table = QTableWidget(0, 4)
         self.category_table.setHorizontalHeaderLabels(["Category", "Income", "Expenses", "Share of Expenses"])
         self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.category_table.setAlternatingRowColors(True)
         self.category_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-
-        tables.addWidget(self.top_merchants_table, stretch=1)
-        tables.addWidget(self.category_table, stretch=1)
-        layout.addLayout(tables, stretch=1)
-
-    def _build_chart_tab(self) -> None:
-        layout = QVBoxLayout(self.chart_tab)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(10)
-
-        actions = QHBoxLayout()
-        actions.addStretch(1)
-        self.save_plot_button = QPushButton("Save plot")
-        self.save_plot_button.clicked.connect(self.save_plot)
-        actions.addWidget(self.save_plot_button)
-        layout.addLayout(actions)
-
-        if QWebEngineView is None:
-            fallback = QWidget()
-            fallback_layout = QVBoxLayout(fallback)
-            fallback_layout.setAlignment(Qt.AlignCenter)
-            self.web_view = QLabel("Interactive preview is opened as a local HTML file.")
-            self.web_view.setAlignment(Qt.AlignCenter)
-            self.external_preview_button = QPushButton("Open interactive preview")
-            self.external_preview_button.clicked.connect(self.open_preview_external)
-            fallback_layout.addWidget(self.web_view)
-            fallback_layout.addWidget(self.external_preview_button, alignment=Qt.AlignCenter)
-            layout.addWidget(fallback, stretch=1)
-        else:
-            self.web_view = QWebEngineView()
-            layout.addWidget(self.web_view, stretch=1)
+        self.category_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.category_table.setToolTip("Click a Category to see its transactions")
+        self.category_table.cellClicked.connect(self.show_category_transactions)
+        layout.addWidget(self.category_table, stretch=2)
 
     def _load_plotly_preview(self, view: QWidget, filename: str, fig: go.Figure) -> None:
         preview_path = preview_dir() / filename
@@ -620,7 +604,7 @@ class FinSightWindow(QMainWindow):
             self.text_table,
             self.min_amount,
             self.refresh_button,
-            self.save_plot_button,
+            self.export_money_flow_button,
             self.tabs,
         ):
             widget.setEnabled(ready)
@@ -745,184 +729,75 @@ class FinSightWindow(QMainWindow):
             self.show_page(SETTINGS_PAGE)
             return
 
-        title = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else None
-        self.current_fig = money_flow_figure(analysis, title=title)
+        self.current_fig = money_flow_figure(analysis)
         if QWebEngineView is None:
             self.web_view.setText("Money flow built. Open the interactive preview or save it to your data folder.")
         else:
-            self._load_plotly_preview(self.web_view, "finsight_flow_preview.html", self.current_fig)
+            self._load_plotly_preview(self.web_view, "money_flow_preview.html", self.current_fig)
         self.refresh_uncategorized()
         self.refresh_dashboard()
 
     def open_preview_external(self) -> None:
         if self.current_fig is None:
             return
-        preview_path = preview_dir() / "finsight_preview.html"
+        preview_path = preview_dir() / "money_flow.html"
         self.current_fig.write_html(str(preview_path), include_plotlyjs=True, full_html=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(preview_path.resolve())))
 
-    @staticmethod
-    def _period_text(analysis: MonthAnalysis) -> tuple[str, str]:
-        start, end = analysis.start_date, analysis.end_date
-        if start is None or end is None:
-            return "No dates", "Date column not detected"
-        days = (end - start).days + 1
-        return analysis.month_label, f"{start:%d.%m.%Y} - {end:%d.%m.%Y} ({'1 day' if days == 1 else f'{days} days'})"
-
     def _category_names(self) -> list[str]:
         return sorted({c for c in self.categories if c} | {OTHER})
-
-    def _transactions_frame(self) -> pd.DataFrame:
-        assert self.analysis is not None
-        return pd.DataFrame(
-            [
-                {
-                    "Date": pd.Timestamp(t.date) if t.date else pd.NaT,
-                    "Merchant": t.merchant,
-                    "Category": t.category,
-                    "Income": t.income,
-                    "Expenses": t.expenses,
-                    "Saved": t.income - t.expenses,
-                }
-                for t in self.analysis.transactions
-            ],
-            columns=["Date", "Merchant", "Category", "Income", "Expenses", "Saved"],
-        )
 
     def refresh_dashboard(self) -> None:
         analysis = self.analysis
         if analysis is None:
             return
-        self.total_outflow_metric.value_label.setText(f"CHF {analysis.expenses:,.2f}")  # type: ignore[attr-defined]
-        self.total_inflow_metric.value_label.setText(f"CHF {analysis.income:,.2f}")  # type: ignore[attr-defined]
+        self.month_header.setText(analysis.month_label)
+        self.total_inflow_metric.value_label.setText(_chf(analysis.income))  # type: ignore[attr-defined]
+        self.total_outflow_metric.value_label.setText(_chf(analysis.expenses))  # type: ignore[attr-defined]
         saved = analysis.saved
-        self.total_saved_metric.value_label.setText(  # type: ignore[attr-defined]
-            f"{'-' if saved < 0 else ''}CHF {abs(saved):,.2f}"
-        )
+        self.total_saved_metric.value_label.setText(_chf(saved))  # type: ignore[attr-defined]
         self.total_saved_metric.value_label.setStyleSheet(  # type: ignore[attr-defined]
             "color: #dc2626;" if saved < 0 else ""
         )
-        period_value, period_label = self._period_text(analysis)
-        self.period_metric.value_label.setText(period_value)  # type: ignore[attr-defined]
-        self.period_metric.label_label.setText(period_label)  # type: ignore[attr-defined]
 
-        transactions = self._transactions_frame()
-        self._refresh_category_breakdown(analysis)
-        self._refresh_top_merchants(transactions)
-        self._refresh_timeline(transactions)
-
-    def _refresh_category_breakdown(self, analysis: MonthAnalysis) -> None:
-        categories = sorted(analysis.categories, key=lambda c: -c.expenses)
+        categories = analysis.categories
         self.category_table.setRowCount(len(categories))
         for row, total in enumerate(categories):
-            share = total.expenses / analysis.expenses * 100 if analysis.expenses else 0.0
             self.category_table.setItem(row, 0, QTableWidgetItem(total.category))
-            self.category_table.setItem(row, 1, QTableWidgetItem(f"CHF {total.income:,.2f}"))
-            self.category_table.setItem(row, 2, QTableWidgetItem(f"CHF {total.expenses:,.2f}"))
-            self.category_table.setItem(row, 3, QTableWidgetItem(f"{share:.1f}%"))
+            self.category_table.setItem(row, 1, QTableWidgetItem(_chf(total.income)))
+            self.category_table.setItem(row, 2, QTableWidgetItem(_chf(total.expenses)))
+            self.category_table.setItem(row, 3, QTableWidgetItem(f"{total.expense_share * 100:.1f}%"))
         self.category_table.resizeColumnsToContents()
         self.category_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
 
-        spend = [c for c in reversed(categories) if c.expenses > 0]
-        fig = go.Figure(
-            go.Bar(
-                x=[c.expenses for c in spend],
-                y=[c.category for c in spend],
-                orientation="h",
-                marker_color="#2563eb",
-                hovertemplate="%{y}<br>CHF %{x:,.2f}<extra></extra>",
-            )
-        )
-        fig.update_layout(
-            title="Expenses by Category",
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
-            font=dict(family="Inter, Segoe UI, Arial", size=12),
-            margin=dict(l=130, r=20, t=48, b=34),
-            xaxis_title="CHF",
-            yaxis_title="",
-            height=360,
-        )
-        if QWebEngineView is None:
-            self.category_view.setText("Category chart requires Qt WebEngine.")
-        else:
-            self._load_plotly_preview(self.category_view, "category_breakdown.html", fig)
+    def show_category_transactions(self, row: int, _column: int = 0) -> None:
+        item = self.category_table.item(row, 0)
+        if self.analysis is None or item is None:
+            return
+        category = item.text()
+        transactions = self.analysis.transactions_in(category)
 
-    def _refresh_top_merchants(self, transactions: pd.DataFrame) -> None:
-        merchants = (
-            transactions[transactions["Expenses"] > 0]
-            .groupby("Merchant", dropna=False)
-            .agg(Spent=("Expenses", "sum"), Transactions=("Expenses", "count"))
-            .sort_values("Spent", ascending=False)
-            .head(12)
-        )
-        self.top_merchants_table.setRowCount(len(merchants))
-        for row, (merchant, values) in enumerate(merchants.iterrows()):
-            self.top_merchants_table.setItem(row, 0, QTableWidgetItem(str(merchant)))
-            self.top_merchants_table.setItem(row, 1, QTableWidgetItem(f"CHF {float(values['Spent']):,.2f}"))
-            self.top_merchants_table.setItem(row, 2, QTableWidgetItem(str(int(values["Transactions"]))))
-        self.top_merchants_table.resizeColumnsToContents()
-        self.top_merchants_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-
-    def _refresh_timeline(self, transactions: pd.DataFrame) -> None:
-        dated = transactions.dropna(subset=["Date"]).copy()
-        if dated.empty:
-            ordered = transactions.reset_index(drop=True).copy()
-            ordered["Step"] = ordered.index + 1
-            ordered["Cumulative Saved"] = ordered["Saved"].cumsum()
-            fig = go.Figure(
-                go.Scatter(
-                    x=ordered["Step"],
-                    y=ordered["Cumulative Saved"],
-                    mode="lines+markers",
-                    line=dict(color="#0f172a", width=3),
-                    hovertemplate="Transaction %{x}<br>CHF %{y:,.2f}<extra></extra>",
-                )
-            )
-            fig.update_layout(xaxis_title="Transaction", title="Cumulative Saved")
-        else:
-            daily = dated.groupby(dated["Date"].dt.date)[["Income", "Expenses", "Saved"]].sum().sort_index()
-            daily["Cumulative Saved"] = daily["Saved"].cumsum()
-            fig = go.Figure()
-            fig.add_bar(
-                x=daily.index,
-                y=daily["Income"],
-                name="Income",
-                marker_color="#16a34a",
-                hovertemplate="Income<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
-            )
-            fig.add_bar(
-                x=daily.index,
-                y=-daily["Expenses"],
-                name="Expenses",
-                marker_color="#dc2626",
-                hovertemplate="Expenses<br>%{x}<br>CHF %{customdata:,.2f}<extra></extra>",
-                customdata=daily["Expenses"],
-            )
-            fig.add_scatter(
-                x=daily.index,
-                y=daily["Cumulative Saved"],
-                name="Cumulative Saved",
-                mode="lines+markers",
-                line=dict(color="#0f172a", width=3),
-                hovertemplate="Cumulative Saved<br>%{x}<br>CHF %{y:,.2f}<extra></extra>",
-            )
-            fig.update_layout(xaxis_title="Date", title="Daily Income and Expenses")
-
-        fig.update_layout(
-            barmode="relative",
-            paper_bgcolor="#ffffff",
-            plot_bgcolor="#ffffff",
-            font=dict(family="Inter, Segoe UI, Arial", size=12),
-            margin=dict(l=54, r=24, t=48, b=42),
-            yaxis_title="CHF",
-            height=360,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        )
-        if QWebEngineView is None:
-            self.timeline_view.setText("Timeline chart requires Qt WebEngine.")
-        else:
-            self._load_plotly_preview(self.timeline_view, "daily_finsight.html", fig)
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"{category} - {self.analysis.month_label}")
+        dialog.resize(820, 480)
+        layout = QVBoxLayout(dialog)
+        table = QTableWidget(len(transactions), 5)
+        table.setHorizontalHeaderLabels(["Date", "Merchant", "Text", "Income", "Expenses"])
+        table.setAlternatingRowColors(True)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        for r, t in enumerate(transactions):
+            table.setItem(r, 0, QTableWidgetItem(f"{t.date:%d.%m.%Y}" if t.date else ""))
+            table.setItem(r, 1, QTableWidgetItem(t.merchant))
+            table.setItem(r, 2, QTableWidgetItem(t.text))
+            table.setItem(r, 3, QTableWidgetItem(_chf(t.income) if t.income else ""))
+            table.setItem(r, 4, QTableWidgetItem(_chf(t.expenses) if t.expenses else ""))
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        layout.addWidget(table)
+        close = QPushButton("Close")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close, alignment=Qt.AlignRight)
+        dialog.exec()
 
     def populate_preview(self) -> None:
         if self.analysis is None:
@@ -1081,7 +956,7 @@ class FinSightWindow(QMainWindow):
         self.refresh_plot()
         QMessageBox.information(self, "Rules saved", f"Rules were saved to {self.store.rules_path}.")
 
-    def save_plot(self) -> None:
+    def export_money_flow(self) -> None:
         if self.current_fig is None:
             return
         source = (self.source_csv.stem if self.source_csv else self.current_csv.stem) if self.current_csv else "finsight"
