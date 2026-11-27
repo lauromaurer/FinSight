@@ -14,8 +14,6 @@ import re
 
 import pandas as pd
 
-from finsight.finsight_core import detect_sep_from_text, detect_skip_rows
-
 UNCATEGORIZED = "Uncategorized"
 OTHER = "Other"
 PREVIEW_ROW_COUNT = 5
@@ -142,6 +140,37 @@ class MonthAnalysis:
 # --- Reading the CSV -------------------------------------------------------
 
 
+def _detect_sep(sample_text: str) -> str:
+    lines = [ln for ln in sample_text.splitlines() if ln.strip()]
+    head = lines[0] if lines else sample_text
+    candidates = [";", ",", "\t", "|"]
+    counts = {c: head.count(c) for c in candidates}
+    best = max(counts, key=counts.get)
+    return best if counts[best] > 0 else ","
+
+
+def _detect_header_row(sample_text: str, sep: str) -> int:
+    header_keywords = {
+        "buchungsdatum",
+        "abschlussdatum",
+        "valutadatum",
+        "belastung",
+        "gutschrift",
+        "description",
+        "merchant",
+        "amount",
+        "debit",
+        "credit",
+    }
+
+    for i, line in enumerate(sample_text.splitlines()[:80]):
+        cells = [c.strip().lower() for c in line.split(sep)]
+        hits = sum(any(keyword in cell for keyword in header_keywords) for cell in cells)
+        if hits >= 2 and len(cells) >= 4:
+            return i
+    return 0
+
+
 def _decode(data: bytes) -> tuple[str, str]:
     for encoding in ("utf-8-sig", "cp1252"):
         try:
@@ -153,8 +182,8 @@ def _decode(data: bytes) -> tuple[str, str]:
 
 def _read_table(data: bytes, overrides: ImportOverrides) -> tuple[pd.DataFrame, str, str, int]:
     text, encoding = _decode(data)
-    sep = overrides.sep or detect_sep_from_text(text[:10_000])
-    header_row = overrides.header_row if overrides.header_row is not None else detect_skip_rows(text, sep)
+    sep = overrides.sep or _detect_sep(text[:10_000])
+    header_row = overrides.header_row if overrides.header_row is not None else _detect_header_row(text, sep)
     try:
         table = pd.read_csv(
             BytesIO(data), encoding=encoding, sep=sep, engine="python", skiprows=header_row, dtype=str
